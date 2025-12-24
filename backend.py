@@ -17,7 +17,7 @@ app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": "*"}})
 
 # --- কনফিগারেশন ---
-BOT_TOKEN = "8336857025:AAHugZte8PjC3nMCdJyaNVpkS6VJmK238lo" # আপনার বটের টোকেন
+BOT_TOKEN = "8336857025:AAHU9LtgSGy5oifVfMk2Le92vkpk94pq6k8" # আপনার বটের টোকেন
 ADMIN_ID = 7605281774  # আপনার অ্যাডমিন আইডি
 FIREBASE_DB_URL = "https://snowman-adventure-4fa71-default-rtdb.firebaseio.com"
 BASE_URL = f"https://api.telegram.org/bot{BOT_TOKEN}"
