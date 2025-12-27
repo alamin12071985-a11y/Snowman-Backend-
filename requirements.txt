@@ -1,6 +1,6 @@
-flask
+Flask
 flask-cors
-requests
 firebase-admin
 python-dotenv
+requests
 gunicorn
