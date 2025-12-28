@@ -1,53 +1,49 @@
 import os
 import json
 import time
-import hmac
-import hashlib
 import random
 import requests
-from urllib.parse import unquote
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from dotenv import load_dotenv
 import firebase_admin
 from firebase_admin import credentials, db
 
-# --- SETUP & CONFIGURATION ---
+# এনভায়রনমেন্ট ভেরিয়েবল লোড করা
 load_dotenv()
 
 app = Flask(__name__)
-CORS(app) # প্রোডাকশনে চাইলে নির্দিষ্ট ডোমেইন সেট করতে পারেন
+CORS(app, resources={r"/*": {"origins": "*"}})
 
-# Environment Variables
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-ADMIN_ID = os.getenv("ADMIN_ID")
-FIREBASE_DB_URL = "https://snowman-adventure-4fa71-default-rtdb.firebaseio.com" # আপনার DB URL
+# --- কনফিগারেশন ---
+BOT_TOKEN = os.getenv("8336857025:AAHU9LtgSGy5oifVfMk2Le92vkpk94pq6k8")
+ADMIN_ID = os.getenv("7605281774")
+FIREBASE_DB_URL = "https://snowman-adventure-4fa71-default-rtdb.firebaseio.com"
 BASE_URL = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
-# Game Constants
 GAME_URL = "https://alamin12071985-a11y.github.io/Snowman-Adventure/"
+GROUP_URL = "https://t.me/snowmanadventurediscuss"
 CHANNEL_URL = "https://t.me/snowmanadventurecommunity"
 
-# --- FIREBASE CONNECTION (Render Friendly) ---
-# Render এ 'FIREBASE_CREDENTIALS' নামে Environment Variable সেট করতে হবে
+# --- Firebase ইনিশিয়ালাইজেশন ---
 try:
     if not firebase_admin._apps:
-        firebase_json = os.getenv("FIREBASE_CREDENTIALS")
-        if firebase_json:
-            # Environment Variable থেকে JSON লোড করা (Render এর জন্য)
-            cred = credentials.Certificate(json.loads(firebase_json))
-        elif os.path.exists("firebase-adminsdk.json"):
-            # লোকাল টেস্টিং এর জন্য ফাইল থেকে
-            cred = credentials.Certificate("firebase-adminsdk.json")
+        firebase_key_json = os.getenv("FIREBASE_KEY")
+        if firebase_key_json:
+            cred_dict = json.loads(firebase_key_json)
+            cred = credentials.Certificate(cred_dict)
         else:
-            raise Exception("No Firebase Credentials Found!")
+            if os.path.exists("firebase-adminsdk.json"):
+                cred = credentials.Certificate("firebase-adminsdk.json")
+            else:
+                raise Exception("Firebase credentials not found!")
 
         firebase_admin.initialize_app(cred, {'databaseURL': FIREBASE_DB_URL})
-        print("✅ Firebase Connected Successfully")
+        print("✅ Firebase connected successfully!")
 except Exception as e:
     print(f"❌ Firebase Error: {e}")
 
-# --- DATA CONFIGURATION ---
+# --- শপ ডেটা ---
 SHOP_ITEMS = {
     'coin_starter': {'stars': 10, 'reward': 5000, 'type': 'coin'},
     'coin_small': {'stars': 20, 'reward': 10000, 'type': 'coin'},
@@ -62,48 +58,44 @@ SHOP_ITEMS = {
     'autotap_30d': {'stars': 200, 'type': 'autotap', 'duration': 30},
 }
 
+# --- SPIN WHEEL CONFIGURATION ---
 SPIN_PRIZES = [0.01, 0.1, 0.5, 1.0, 5.0, 10.0, 0.05, 0.2]
-SPIN_WEIGHTS = [40, 25, 10, 5, 1, 0.5, 15, 3.5]
+SPIN_WEIGHTS = [40, 25, 10, 5, 1, 0.5, 15, 3.5] 
 
-# --- SECURITY FUNCTION (ANTI-HACK) ---
-def verify_telegram_data(init_data):
-    """
-    টেলিগ্রাম থেকে আসা ডাটা ভেরিফাই করে।
-    এটি নিশ্চিত করে যে রিকোয়েস্টটি আসল টেলিগ্রাম অ্যাপ থেকেই আসছে।
-    """
-    if not BOT_TOKEN: return None
+# --- হেল্পার ফাংশন ---
+def save_bot_user(chat_id):
     try:
-        parsed_data = unquote(init_data)
-        data_parts = parsed_data.split('&')
-        
-        hash_part = next((part for part in data_parts if part.startswith('hash=')), None)
-        if not hash_part: return None
-        
-        received_hash = hash_part.split('=')[1]
-        data_to_check = sorted([part for part in data_parts if not part.startswith('hash=')])
-        data_check_string = '\n'.join(data_to_check)
-        
-        secret_key = hmac.new(b"WebAppData", BOT_TOKEN.encode(), hashlib.sha256).digest()
-        calculated_hash = hmac.new(secret_key, data_check_string.encode(), hashlib.sha256).hexdigest()
-        
-        if calculated_hash != received_hash:
-            return None
-            
-        user_part = next((part for part in data_parts if part.startswith('user=')), None)
-        user_json = user_part.split('user=')[1]
-        return json.loads(user_json)
-    except Exception:
-        return None
+        ref = db.reference(f'bot_users/{chat_id}')
+        ref.set(True)
+    except Exception as e:
+        print(f"Error saving user: {e}")
 
-# --- HELPER FUNCTIONS ---
+def get_all_users():
+    try:
+        ref = db.reference('bot_users')
+        users = ref.get()
+        if users:
+            return list(users.keys())
+        return []
+    except Exception as e:
+        print(f"Error fetching users: {e}")
+        return []
+
 def send_telegram_message(chat_id, text, reply_markup=None):
-    payload = {"chat_id": chat_id, "text": text, "parse_mode": "Markdown"}
-    if reply_markup: payload["reply_markup"] = reply_markup
-    try: requests.post(f"{BASE_URL}/sendMessage", json=payload)
-    except: pass
+    payload = {
+        "chat_id": chat_id,
+        "text": text,
+        # "parse_mode": "Markdown" # Markdown আপাতত বন্ধ রাখছি যাতে টেক্সটের ইমোজি বা সিম্বল এরর না দেয়
+    }
+    if reply_markup:
+        payload["reply_markup"] = reply_markup
+    
+    try:
+        requests.post(f"{BASE_URL}/sendMessage", json=payload)
+    except Exception as e:
+        print(f"Telegram API Error: {e}")
 
 def update_user_perks(user_id, item_id):
-    """শপ থেকে আইটেম কিনলে ডাটাবেস আপডেট করে"""
     item = SHOP_ITEMS.get(item_id)
     if not item: return False
     
@@ -111,229 +103,169 @@ def update_user_perks(user_id, item_id):
     data = ref.get() or {}
     now_ms = int(time.time() * 1000)
 
-    updates = {}
     if item['type'] == 'coin':
-        updates['balance'] = data.get('balance', 0) + item['reward']
+        new_balance = data.get('balance', 0) + item['reward']
+        ref.update({'balance': new_balance})
     
     elif item['type'] in ['booster', 'autotap']:
         field = f"{item['type']}EndTime"
         current_end = data.get(field, 0)
         start_point = max(now_ms, current_end)
         duration_ms = item['duration'] * 24 * 60 * 60 * 1000
-        updates[field] = start_point + duration_ms
-        
-    if updates:
-        ref.update(updates)
-        return True
-    return False
+        new_end = start_point + duration_ms
+        ref.update({field: new_end})
+    
+    return True
 
-# --- API ENDPOINTS ---
-
+# --- রাউটসমূহ ---
 @app.route('/')
 def home():
-    return "Snowman Security Server is Active!"
+    return "Snowman Adventure Backend is Running Securely!"
 
-# 1. AUTH & LOAD DATA (Secure)
-@app.route('/auth', methods=['POST'])
-def auth_user():
-    init_data = request.headers.get('Authorization')
-    user_info = verify_telegram_data(init_data)
+@app.route('/create_invoice', methods=['POST'])
+def create_invoice():
+    req_data = request.json
+    user_id = req_data.get('user_id')
+    item_id = req_data.get('item_id')
     
-    if not user_info:
-        return jsonify({"error": "Unauthorized"}), 403
-        
-    user_id = str(user_info['id'])
-    ref = db.reference(f'users/{user_id}')
-    user_db = ref.get()
-    
-    if not user_db:
-        # নতুন ইউজার তৈরি
-        new_user = {
-            "balance": 500,
-            "tonBalance": 0.0,
-            "level": 1,
-            "username": user_info.get('username', 'Unknown'),
-            "last_sync": int(time.time()),
-            "referralCount": 0
-        }
-        # রেফারেল চেকিং (start_param থেকে)
-        # ফ্রন্টেন্ড থেকে আলাদাভাবে start_param পাঠাতে হবে অথবা initData চেক করতে হবে
-        ref.set(new_user)
-        return jsonify(new_user)
-    
-    return jsonify(user_db)
+    if not user_id or not item_id:
+        return jsonify({"ok": False, "error": "Missing data"}), 400
 
-# 2. SYNC TAPS (Anti-Cheat & Referral Commission)
-@app.route('/sync_taps', methods=['POST'])
-def sync_taps():
-    init_data = request.headers.get('Authorization')
-    user_info = verify_telegram_data(init_data)
-    
-    if not user_info:
-        return jsonify({"status": "error", "reason": "Unauthorized"}), 403
+    item = SHOP_ITEMS.get(item_id)
+    if not item: 
+        return jsonify({"ok": False, "error": "Item not found"}), 400
 
-    payload = request.json
-    taps_count = payload.get('taps', 0)
-    user_id = str(user_info['id'])
+    payload = {
+        "title": f"Buy {item_id.replace('_', ' ').title()}",
+        "description": "Boost your Snowman Adventure!",
+        "payload": f"{item_id}_{user_id}",
+        "provider_token": "", 
+        "currency": "XTR", 
+        "prices": [{"label": "Price", "amount": item['stars']}] 
+    }
     
-    ref = db.reference(f'users/{user_id}')
-    user_db = ref.get()
-    
-    if not user_db:
-        return jsonify({"status": "error", "reason": "User not found"}), 404
+    r = requests.post(f"{BASE_URL}/createInvoiceLink", json=payload)
+    return jsonify(r.json())
 
-    # --- Anti-Cheat Logic ---
-    current_time = int(time.time())
-    last_sync = user_db.get('last_sync', current_time - 5)
-    time_diff = current_time - last_sync
-    
-    # বুস্টার চেক করা
-    multiplier = 1
-    if user_db.get('boosterEndTime', 0) > (current_time * 1000):
-        multiplier = 2
-    
-    # ধরা যাক মানুষ সর্বোচ্চ সেকেন্ডে ১৫ টা ট্যাপ করতে পারে
-    max_possible = (time_diff * 15) + 50 # ৫০ বাফার
-    
-    if taps_count > max_possible:
-        # হ্যাক ডিটেক্টেড - ট্যাপ বাতিল
-        print(f"⚠️ Suspicious activity: User {user_id}")
-        return jsonify({
-            "status": "rejected", 
-            "balance": user_db.get('balance', 0)
-        })
-
-    # ব্যালেন্স ক্যালকুলেশন
-    level = user_db.get('level', 1)
-    earned_coins = taps_count * level * multiplier
-    new_balance = user_db.get('balance', 0) + earned_coins
-    
-    # 10% Referral Commission (Safe Transaction)
-    referrer_id = user_db.get('referredBy')
-    if referrer_id and earned_coins > 10:
-        commission = int(earned_coins * 0.10)
-        if commission > 0:
-            try:
-                # রেফারারের ব্যালেন্স অ্যাটমিকভাবে আপডেট করা
-                r_ref = db.reference(f'users/{referrer_id}/balance')
-                r_ref.transaction(lambda current: (current or 0) + commission)
-            except: pass
-
-    # ইউজারের ডাটা আপডেট
-    ref.update({
-        "balance": new_balance,
-        "last_sync": current_time,
-        "tapCount": user_db.get('tapCount', 0) + taps_count
-    })
-    
-    return jsonify({"status": "ok", "balance": new_balance})
-
-# 3. SECURE SPIN WHEEL
 @app.route('/spin_wheel', methods=['POST'])
-def spin_wheel_secure():
-    init_data = request.headers.get('Authorization')
-    user_info = verify_telegram_data(init_data)
+def spin_wheel():
+    req_data = request.json
+    user_id = req_data.get('user_id')
     
-    if not user_info:
-        return jsonify({"ok": False, "error": "Unauthorized"}), 403
-        
-    user_id = str(user_info['id'])
+    if not user_id:
+        return jsonify({"ok": False, "error": "User ID required"}), 400
+    
     ref = db.reference(f'users/{user_id}')
-    user_db = ref.get() or {}
+    user_data = ref.get() or {}
     
-    # 24 Hour Cooldown Check
-    last_spin = user_db.get('lastSpinTime', 0)
-    now_ms = int(time.time() * 1000)
-    
-    # একদিন পার হয়েছে কিনা চেক (এখানে ৮৬৪০০০০০ ms = ২৪ ঘন্টা)
-    if (now_ms - last_spin) < 86400000:
-        return jsonify({"ok": False, "error": "Cooldown active"}), 400
-        
-    # Server-side Randomness (Hack proof)
     chosen_index = random.choices(range(8), weights=SPIN_WEIGHTS, k=1)[0]
     prize_amount = SPIN_PRIZES[chosen_index]
     
-    new_ton = float(user_db.get('tonBalance', 0.0)) + prize_amount
+    current_ton = float(user_data.get('tonBalance', 0.0))
+    new_ton = current_ton + prize_amount
     
     ref.update({
         'tonBalance': new_ton,
-        'lastSpinTime': now_ms
+        'lastSpinTime': int(time.time() * 1000)
     })
     
     return jsonify({
         "result": True,
         "index": chosen_index,
         "prize": prize_amount,
-        "new_ton_balance": new_ton
+        "new_balance": new_ton
     })
 
-# 4. PAYMENT & SHOP
-@app.route('/create_invoice', methods=['POST'])
-def create_invoice():
-    # এখানে initData চেক করা ভালো, তবে পেমেন্টের জন্য শিথিল করা যায়
-    req_data = request.json
-    user_id = req_data.get('user_id')
-    item_id = req_data.get('item_id')
-    
-    item = SHOP_ITEMS.get(item_id)
-    if not item or not user_id:
-        return jsonify({"ok": False}), 400
-
-    payload = {
-        "title": f"Buy {item_id.replace('_', ' ').title()}",
-        "description": "Upgrade your game!",
-        "payload": f"{item_id}_{user_id}",
-        "provider_token": "", # Stars Payment
-        "currency": "XTR",
-        "prices": [{"label": "Price", "amount": item['stars']}]
-    }
-    r = requests.post(f"{BASE_URL}/createInvoiceLink", json=payload)
-    return jsonify(r.json())
-
-# 5. TELEGRAM WEBHOOK (Bot Logic)
 @app.route('/webhook', methods=['POST'])
-def webhook():
+def telegram_webhook():
     update = request.json
     
+    # 1. Payment Pre-Checkout
     if 'pre_checkout_query' in update:
+        query_id = update['pre_checkout_query']['id']
         requests.post(f"{BASE_URL}/answerPreCheckoutQuery", json={
-            "pre_checkout_query_id": update['pre_checkout_query']['id'], 
+            "pre_checkout_query_id": query_id, 
             "ok": True
         })
         return "OK", 200
 
+    # 2. Message Handling
     if 'message' in update:
         msg = update['message']
         chat_id = msg['chat']['id']
-        
-        # Payment Success Handling
+        text = msg.get('text', '')
+        user_id = msg.get('from', {}).get('id')
+
+        # ইউজার সেভ করা
+        save_bot_user(chat_id)
+
+        # পেমেন্ট সফল হলে
         if 'successful_payment' in msg:
+            payload = msg['successful_payment']['invoice_payload']
             try:
-                data = msg['successful_payment']['invoice_payload']
-                item_id, uid = data.split('_', 1)
+                item_id, uid = payload.split('_', 1)
                 if update_user_perks(uid, item_id):
-                    send_telegram_message(chat_id, "✅ Payment Successful! Reward Added.")
-            except: pass
+                    send_telegram_message(chat_id, f"✅ Payment Successful! Your {item_id} rewards have been added.")
+            except Exception as e:
+                print(f"Payment logic error: {e}")
             return "OK", 200
 
-        # Welcome Message
-        text = msg.get('text', '')
-        if text.startswith('/start'):
-            # স্টার্ট প্যারামিটার হ্যান্ডলিং (রেফারেল)
-            # /start 12345 (এখানে 12345 হলো রেফারার আইডি)
-            args = text.split(' ')
-            if len(args) > 1:
-                referrer_id = args[1]
-                # এখানে রেফারেল লজিক ডাটাবেসে সেভ করতে পারেন যদি ইউজার নতুন হয়
-                # ফ্রন্টেন্ড থেকেও হ্যান্ডেল করা যায়, তবে ব্যাকএন্ডে রাখা নিরাপদ
+        # --- ADMIN BROADCAST ---
+        if text.startswith('/broadcast') and str(user_id) == str(ADMIN_ID):
+            broadcast_msg = text.replace('/broadcast', '').strip()
+            if broadcast_msg:
+                users = get_all_users()
+                count = 0
+                send_telegram_message(chat_id, f"📡 Sending to {len(users)} users...")
+                for uid in users:
+                    try:
+                        send_telegram_message(uid, broadcast_msg)
+                        count += 1
+                        time.sleep(0.05)
+                    except:
+                        continue
+                send_telegram_message(chat_id, f"✅ Sent to {count} users.")
+            else:
+                send_telegram_message(chat_id, "Usage: `/broadcast Your Message`")
+            return "OK", 200
 
-            welcome_text = "☃️ *Welcome to Snowman Adventure!*\nTap, Earn, and Win Real Crypto!"
-            kb = {"inline_keyboard": [[{"text": "🎮 Play Now", "web_app": {"url": GAME_URL}}],
-                                      [{"text": "📢 Community", "url": CHANNEL_URL}]]}
-            send_telegram_message(chat_id, welcome_text, kb)
+        # --- সাধারণ বাটন (সব মেসেজের সাথে যাবে) ---
+        keyboard = {
+            "inline_keyboard": [
+                [{"text": "🚀 Play Game ❄️", "web_app": {"url": GAME_URL}}],
+                [{"text": "Join Community", "url": CHANNEL_URL}]
+            ]
+        }
+
+        # --- মেসেজ লজিক ---
+        if text == '/start':
+            # ইউজার যখন START এ ক্লিক করবে
+            welcome_text = (
+                "Alright, welcome to Snowman Adventure ☃️👋\n"
+                "You’re officially in!\n"
+                "This mini app is all about having fun, earning rewards, and exploring step by step — no rush, just vibes ❄️\n"
+                "Tap around, complete tasks, invite friends, and see how far you can go 🚀\n"
+                "We’re still building and improving things, so if anything feels confusing or off, let us know. Your feedback actually matters here 💬\n"
+                "Good luck on your journey, and enjoy the adventure!\n"
+                "Let’s see how far your snowman can go ⛄️✨"
+            )
+            send_telegram_message(chat_id, welcome_text, keyboard)
+        
+        else:
+            # ইউজার যখন অন্য কিছু লিখবে
+            reply_text = (
+                "Hey there! 👋❄️\n"
+                "Looks like you sent a message — nice 😄\n"
+                "Just a quick note: Snowman Adventure works through the buttons and features inside the mini app, not regular chat messages.\n"
+                "👉 Use the app menu\n"
+                "👉 Tap, complete tasks, invite friends\n"
+                "👉 Explore and earn rewards along the way\n"
+                "If you’re stuck or something feels off, don’t worry — we’re improving things step by step, and your feedback helps a lot 💬\n"
+                "Now jump back into the app and keep the adventure going"
+            )
+            send_telegram_message(chat_id, reply_text, keyboard)
 
     return "OK", 200
 
 if __name__ == '__main__':
-    # লোকাল পিসিতে রান করার জন্য
     app.run(host='0.0.0.0', port=5000)
