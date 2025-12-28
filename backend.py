@@ -16,14 +16,20 @@ app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": "*"}})
 
 # --- কনফিগারেশন ---
-BOT_TOKEN = os.getenv("8336857025:AAHU9LtgSGy5oifVfMk2Le92vkpk94pq6k8")
-ADMIN_ID = os.getenv("7605281774")
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+ADMIN_ID = os.getenv("ADMIN_ID")
 FIREBASE_DB_URL = "https://snowman-adventure-4fa71-default-rtdb.firebaseio.com"
 BASE_URL = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
 GAME_URL = "https://alamin12071985-a11y.github.io/Snowman-Adventure/"
 GROUP_URL = "https://t.me/snowmanadventurediscuss"
 CHANNEL_URL = "https://t.me/snowmanadventurecommunity"
+
+# সার্ভার স্টার্ট হওয়ার সময় টোকেন চেক করা (Debugging)
+if not BOT_TOKEN:
+    print("❌ ERROR: BOT_TOKEN is missing! Please set it in Environment Variables.")
+else:
+    print(f"✅ Bot Token Loaded: {BOT_TOKEN[:5]}*******")
 
 # --- Firebase ইনিশিয়ালাইজেশন ---
 try:
@@ -85,7 +91,6 @@ def send_telegram_message(chat_id, text, reply_markup=None):
     payload = {
         "chat_id": chat_id,
         "text": text,
-        # "parse_mode": "Markdown" # Markdown আপাতত বন্ধ রাখছি যাতে টেক্সটের ইমোজি বা সিম্বল এরর না দেয়
     }
     if reply_markup:
         payload["reply_markup"] = reply_markup
@@ -128,24 +133,43 @@ def create_invoice():
     user_id = req_data.get('user_id')
     item_id = req_data.get('item_id')
     
+    # 1. Debugging: চেক করা হচ্ছে ডেটা আসছে কিনা
+    print(f"🔹 Invoice Request: User={user_id}, Item={item_id}")
+
     if not user_id or not item_id:
         return jsonify({"ok": False, "error": "Missing data"}), 400
 
     item = SHOP_ITEMS.get(item_id)
     if not item: 
+        print(f"❌ Item not found in SHOP_ITEMS: {item_id}")
         return jsonify({"ok": False, "error": "Item not found"}), 400
 
+    # 2. Payload তৈরি (Stars Payment)
     payload = {
         "title": f"Buy {item_id.replace('_', ' ').title()}",
         "description": "Boost your Snowman Adventure!",
         "payload": f"{item_id}_{user_id}",
-        "provider_token": "", 
+        "provider_token": "",  # Telegram Stars এর জন্য এটি ফাঁকা থাকতে হবে
         "currency": "XTR", 
-        "prices": [{"label": "Price", "amount": item['stars']}] 
+        "prices": [{"label": "Price", "amount": int(item['stars'])}] # int নিশ্চিত করা হলো
     }
     
-    r = requests.post(f"{BASE_URL}/createInvoiceLink", json=payload)
-    return jsonify(r.json())
+    try:
+        # 3. Telegram API কল করা
+        r = requests.post(f"{BASE_URL}/createInvoiceLink", json=payload)
+        resp_data = r.json()
+        
+        # 4. Debugging: টেলিগ্রামের রেসপন্স চেক করা
+        if not resp_data.get("ok"):
+            print(f"❌ Telegram API Error: {resp_data}") # সার্ভার লগে এরর দেখাবে
+        else:
+            print(f"✅ Invoice Link Created: {resp_data.get('result')}")
+
+        return jsonify(resp_data)
+        
+    except Exception as e:
+        print(f"❌ Server Error in create_invoice: {e}")
+        return jsonify({"ok": False, "error": str(e)}), 500
 
 @app.route('/spin_wheel', methods=['POST'])
 def spin_wheel():
@@ -229,11 +253,12 @@ def telegram_webhook():
                 send_telegram_message(chat_id, "Usage: `/broadcast Your Message`")
             return "OK", 200
 
-        # --- সাধারণ বাটন (সব মেসেজের সাথে যাবে) ---
+        # --- ৩টি বাটন কনফিগারেশন ---
         keyboard = {
             "inline_keyboard": [
                 [{"text": "🚀 Play Game ❄️", "web_app": {"url": GAME_URL}}],
-                [{"text": "Join Community", "url": CHANNEL_URL}]
+                [{"text": "Join Community 📢", "url": CHANNEL_URL}],
+                [{"text": "Join Discussion 💬", "url": GROUP_URL}]
             ]
         }
 
