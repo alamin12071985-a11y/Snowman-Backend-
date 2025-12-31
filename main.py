@@ -3,6 +3,7 @@ import sys
 import logging
 import asyncio
 import sqlite3
+import html  # HTML নাম ফিক্স করার জন্য
 from datetime import datetime
 from aiohttp import web
 from aiogram import Bot, Dispatcher, Router, F, types
@@ -11,55 +12,66 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, LabeledPri
 from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
-# --- LOGGING SETUP ---
-logging.basicConfig(level=logging.INFO, stream=sys.stdout)
+# --- LOGGING SETUP (বিস্তারিত এরর দেখার জন্য) ---
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s",
+    stream=sys.stdout
+)
 
-# --- CONFIGURATION (ENV VARS) ---
+# --- CONFIGURATION ---
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 APP_URL = os.getenv("APP_URL")
 
-# Check Environment Variables
 if not BOT_TOKEN:
-    logging.error("❌ CRITICAL ERROR: BOT_TOKEN is missing!")
+    logging.error("❌ CRITICAL: BOT_TOKEN is missing!")
     sys.exit(1)
 
 if not APP_URL:
-    logging.error("❌ CRITICAL ERROR: APP_URL is missing!")
+    logging.error("❌ CRITICAL: APP_URL is missing!")
     sys.exit(1)
 
 WEBHOOK_PATH = "/webhook"
 WEBHOOK_URL = f"{APP_URL}{WEBHOOK_PATH}"
 
-# --- DATABASE SETUP (SQLite) ---
+# --- DATABASE SETUP (Safe Mode) ---
 DB_FILE = "snowman_users.db"
 
 def init_db():
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
-    cursor.execute('''CREATE TABLE IF NOT EXISTS users (user_id INTEGER PRIMARY KEY)''')
-    conn.commit()
-    conn.close()
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        cursor = conn.cursor()
+        cursor.execute('''CREATE TABLE IF NOT EXISTS users (user_id INTEGER PRIMARY KEY)''')
+        conn.commit()
+        conn.close()
+        logging.info("✅ Database initialized successfully.")
+    except Exception as e:
+        logging.error(f"❌ Database Init Error: {e}")
 
 def add_user(user_id):
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
+    """সেফলি ইউজার এড করার ফাংশন"""
     try:
+        conn = sqlite3.connect(DB_FILE)
+        cursor = conn.cursor()
         cursor.execute("INSERT OR IGNORE INTO users (user_id) VALUES (?)", (user_id,))
         conn.commit()
-    except Exception as e:
-        logging.error(f"DB Error: {e}")
-    finally:
         conn.close()
+    except Exception as e:
+        logging.error(f"⚠️ Failed to add user to DB: {e}")
 
 def get_all_users():
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
-    cursor.execute("SELECT user_id FROM users")
-    users = [row[0] for row in cursor.fetchall()]
-    conn.close()
-    return users
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        cursor = conn.cursor()
+        cursor.execute("SELECT user_id FROM users")
+        users = [row[0] for row in cursor.fetchall()]
+        conn.close()
+        return users
+    except Exception as e:
+        logging.error(f"⚠️ Failed to fetch users: {e}")
+        return []
 
-# --- SHOP CONFIGURATION ---
+# --- SHOP ITEMS ---
 SHOP_ITEMS = {
     'coin_starter': {'price': 10, 'amount': 100},
     'coin_small': {'price': 50, 'amount': 1},
@@ -68,14 +80,14 @@ SHOP_ITEMS = {
     'coin_mega': {'price': 500, 'amount': 1},
 }
 
-# --- BOT INITIALIZATION ---
+# --- BOT INIT ---
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 router = Router()
 dp.include_router(router)
 scheduler = AsyncIOScheduler()
 
-# --- BUTTONS ---
+# --- KEYBOARD ---
 def get_main_keyboard():
     kb = [
         [InlineKeyboardButton(text="❄️ Start App ☃️", url="https://t.me/snowmanadventurebot?startapp")],
@@ -86,18 +98,19 @@ def get_main_keyboard():
     ]
     return InlineKeyboardMarkup(inline_keyboard=kb)
 
-# --- TELEGRAM HANDLERS ---
+# --- HANDLERS ---
 
 @router.message(Command("start"))
 async def cmd_start(message: types.Message):
-    user_id = message.from_user.id
-    first_name = message.from_user.first_name
-    
-    # Save User to DB
-    add_user(user_id)
-    
-    # Message with Blockquote (Side Bar)
-    text = f"""
+    try:
+        user_id = message.from_user.id
+        # নাম Escape করা হচ্ছে যাতে HTML এরর না হয়
+        first_name = html.escape(message.from_user.first_name)
+        
+        # ডাটাবেসে সেভ
+        add_user(user_id)
+        
+        text = f"""
 ❄️☃️ <b>Hey {first_name}, Welcome to Snowman Adventure!</b> ☃️❄️
 
 Brrrr… the snow is falling and your journey starts <b>RIGHT NOW!</b> 🌨️✨
@@ -114,15 +127,22 @@ Every tap matters. Every coin counts.
 And you are now part of the <b>Snowman family</b> 🤍☃️
 
 👇 <b>Start Your Journey Below</b> 👇
-    """
-    await message.answer(text, parse_mode="HTML", reply_markup=get_main_keyboard())
+        """
+        await message.answer(text, parse_mode="HTML", reply_markup=get_main_keyboard())
+        logging.info(f"✅ Sent WELCOME message to {user_id}")
+
+    except Exception as e:
+        logging.error(f"❌ Error in /start command: {e}")
 
 @router.message(F.text)
 async def echo_all(message: types.Message):
-    first_name = message.from_user.first_name
-    
-    # Message with Blockquote (Side Bar)
-    text = f"""
+    try:
+        user_id = message.from_user.id
+        first_name = html.escape(message.from_user.first_name)
+        
+        logging.info(f"📩 Received text from {user_id}: {message.text}")
+
+        text = f"""
 ❄️☃️ <b>Hey {first_name}, Welcome Back!</b> ☃️❄️
 
 Snowman heard you typing… and got excited! 😄💫
@@ -142,32 +162,37 @@ Every moment brings rewards. 🌟
 <b>Choose your next move below and keep the adventure going ⬇️</b>
 
 ❄️ <i>Stay cool. Keep tapping. Snowman Adventure never sleeps!</i> ☃️🔥
-    """
-    await message.answer(text, parse_mode="HTML", reply_markup=get_main_keyboard())
+        """
+        await message.answer(text, parse_mode="HTML", reply_markup=get_main_keyboard())
+        logging.info(f"✅ Sent REPLY message to {user_id}")
 
-# --- PAYMENT HANDLERS ---
+    except Exception as e:
+        logging.error(f"❌ Error in echo_all handler: {e}")
+
+# --- PAYMENT ---
 @router.pre_checkout_query()
 async def on_pre_checkout(pre_checkout_query: types.PreCheckoutQuery):
     await bot.answer_pre_checkout_query(pre_checkout_query.id, ok=True)
 
 @router.message(F.successful_payment)
 async def on_successful_payment(message: types.Message):
-    await message.answer(
-        "<blockquote>❄️ <b>Payment Successful!</b>\nYour items have been added. Restart the game to see changes! ☃️</blockquote>", 
-        parse_mode="HTML"
-    )
+    try:
+        await message.answer(
+            "<blockquote>❄️ <b>Payment Successful!</b>\nYour items have been added. Restart the game to see changes! ☃️</blockquote>", 
+            parse_mode="HTML"
+        )
+    except Exception as e:
+        logging.error(f"Payment Msg Error: {e}")
 
-# --- DAILY BROADCAST TASK (AUTOMATIC) ---
+# --- BROADCAST ---
 async def send_daily_broadcast():
-    """Runs automatically every day at 08:00 AM"""
     logging.info("⏳ Starting Daily Broadcast...")
-    
     users = get_all_users()
+    
     if not users:
-        logging.info("No users found to broadcast.")
+        logging.info("⚠️ No users found for broadcast.")
         return
 
-    # Broadcast Message with Side Bars
     caption = """
 ❄️🚨 <b>HEY! Your Daily Rewards Are MELTING AWAY!</b> 🚨❄️
 
@@ -190,10 +215,9 @@ The snow is falling… the prizes are waiting…
 👉 <b>Open Snowman Adventure NOW and claim today’s wins! 🎮❄️</b>
     """
     
-    # Photo ID (Ensure this ID is valid)
     photo_file_id = "AgACAgUAAxkBAAE_9f1pVL83a2yTeglyOW1P3rQRmcT0iwACpwtrGxjJmVYBpQKTP5TwDQEAAwIAA3kAAzgE"
     
-    count = 0
+    success_count = 0
     for user_id in users:
         try:
             await bot.send_photo(
@@ -203,26 +227,24 @@ The snow is falling… the prizes are waiting…
                 parse_mode="HTML", 
                 reply_markup=get_main_keyboard()
             )
-            count += 1
-            await asyncio.sleep(0.05) # Prevent flood limits
+            success_count += 1
+            await asyncio.sleep(0.05) 
         except Exception as e:
-            logging.error(f"Failed to send to {user_id}: {e}")
+            logging.error(f"❌ Failed to send to {user_id}: {e}")
             
-    logging.info(f"✅ Daily Broadcast sent to {count} users.")
+    logging.info(f"✅ Broadcast finished. Sent to {success_count} users.")
 
-# --- API ROUTES ---
-
+# --- SERVER ROUTES ---
 async def create_invoice_api(request):
     try:
         data = await request.json()
         item_id = data.get('item_id')
         user_id = data.get('user_id')
-
+        
         if item_id not in SHOP_ITEMS:
             return web.json_response({"error": "Item not found"}, status=404)
-
-        item = SHOP_ITEMS[item_id]
         
+        item = SHOP_ITEMS[item_id]
         prices = [LabeledPrice(label=item_id, amount=item['price'])]
         
         link = await bot.create_invoice_link(
@@ -235,46 +257,42 @@ async def create_invoice_api(request):
         )
         return web.json_response({"result": link})
     except Exception as e:
+        logging.error(f"Invoice API Error: {e}")
         return web.json_response({"error": str(e)}, status=500)
 
 async def trigger_broadcast_manual(request):
-    """Manual Trigger via URL"""
     asyncio.create_task(send_daily_broadcast())
-    return web.Response(text="🚀 Broadcast process started in background!")
+    return web.Response(text="🚀 Broadcast started manually!")
 
 async def home(request):
-    return web.Response(text="⛄ Snowman Adventure Backend is Running Successfully! ❄️")
+    return web.Response(text="⛄ Snowman Bot is Running! ❄️")
 
-# --- WEBHOOK & STARTUP ---
+# --- LIFECYCLE ---
 async def on_startup(bot: Bot):
     await bot.set_webhook(WEBHOOK_URL)
     init_db()
-    
-    # Schedule Daily Broadcast (Every Day at 08:00 Server Time)
+    # Schedule: Every day at 08:00 AM
     scheduler.add_job(send_daily_broadcast, 'cron', hour=8, minute=0)
     scheduler.start()
-    
-    logging.info(f"🔗 Webhook set to: {WEBHOOK_URL}")
-    logging.info("⏰ Daily Broadcast Scheduler Started (08:00 AM)")
+    logging.info(f"✅ Webhook set: {WEBHOOK_URL}")
 
 async def on_shutdown(bot: Bot):
     await bot.delete_webhook()
     scheduler.shutdown()
-    logging.info("🔌 Bot Shutdown")
+    logging.info("🛑 Bot Stopped")
 
-# --- MAIN EXECUTION ---
+# --- MAIN ---
 def main():
     dp.startup.register(on_startup)
     dp.shutdown.register(on_shutdown)
 
     app = web.Application()
-    
     app.router.add_post('/create_invoice', create_invoice_api)
     app.router.add_get('/broadcast', trigger_broadcast_manual)
     app.router.add_get('/', home)
 
-    webhook_requests_handler = SimpleRequestHandler(dispatcher=dp, bot=bot)
-    webhook_requests_handler.register(app, path=WEBHOOK_PATH)
+    webhook_handler = SimpleRequestHandler(dispatcher=dp, bot=bot)
+    webhook_handler.register(app, path=WEBHOOK_PATH)
     
     setup_application(app, dp, bot=bot)
 
