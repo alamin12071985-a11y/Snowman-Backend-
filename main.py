@@ -54,7 +54,7 @@ dp.include_router(router)
 # --- BUTTONS ---
 def get_main_keyboard():
     kb = [
-        [InlineKeyboardButton(text="❄️Start App☃️", url="https://t.me/snowmanadventurebot/startapp")],
+        [InlineKeyboardButton(text="❄️Start App☃️", url="https://t.me/snowmanadventurebot?startapp")],
         [
             InlineKeyboardButton(text="❄️ Channel 🎯", url="https://t.me/snowmanadventurecommunity"),
             InlineKeyboardButton(text="❄️ Discuss 🥶", url="https://t.me/snowmanadventurediscuss")
