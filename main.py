@@ -98,7 +98,7 @@ def get_cancel_kb():
     return InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🔙 Back", callback_data="adm_back")]])
 
 # ==========================================
-# 👇 COMMAND HANDLERS (MUST BE TOP) 👇
+# 👇 COMMAND HANDLERS (ADMIN FIXED) 👇
 # ==========================================
 
 @router.message(Command("start"))
@@ -122,8 +122,7 @@ async def cmd_admin(message: types.Message, state: FSMContext):
     user_id = message.from_user.id
     logging.info(f"Admin Access Requested by: {user_id}")
     
-    # 🔴 ID CHECK (DEBUGGING MODE)
-    # যদি আপনার ID সেট করা না থাকে, তাহলে বট আপনাকে আপনার ID জানিয়ে দিবে।
+    # 🔴 ID CHECK & DEBUGGING
     if user_id not in ADMIN_IDS:
         await message.answer(
             f"🚫 <b>Access Denied!</b>\n\n"
@@ -134,7 +133,7 @@ async def cmd_admin(message: types.Message, state: FSMContext):
         )
         return
 
-    # যদি ID মিলে যায়, প্যানেল ওপেন হবে
+    # Admin Accepted
     await state.clear()
     await state.update_data(text="❄️ <b>Default Broadcast Message</b>", buttons=[])
     await state.set_state(BroadcastState.dashboard)
@@ -251,14 +250,14 @@ async def cb_send(call: CallbackQuery, state: FSMContext):
     await state.clear()
 
 # ==========================================
-# 👇 GENERAL TEXT HANDLER (MUST BE LAST) 👇
+# 👇 GENERAL TEXT HANDLER (IGNORE COMMANDS FIX) 👇
 # ==========================================
 
+# ⚠️ এই লাইনটি গুরুত্বপূর্ণ: এটি / দিয়ে শুরু হওয়া মেসেজগুলো ইগনোর করবে
 @router.message(F.text & ~F.text.startswith("/"))
 async def echo_all(message: types.Message):
     """
-    This handles ONLY normal text messages.
-    It intentionally ignores any message starting with '/' (commands).
+    Handles normal text messages but IGNORES commands like /admin
     """
     add_user(message.from_user.id)
     first_name = html.escape(message.from_user.first_name)
@@ -266,7 +265,6 @@ async def echo_all(message: types.Message):
     text = f"""
 ❄️☃️ <b>Hey {first_name}, Welcome Back!</b> ☃️❄️
 Snowman heard you typing… and got excited! 😄💫
-That means it’s time to jump back into the icy fun ❄️🎮
 
 <blockquote>➡️ <b>Tap the Snowman:</b> Earn coins 💰
 ➡️ <b>Complete Tasks:</b> Get instant rewards 🎯
@@ -276,9 +274,9 @@ That means it’s time to jump back into the icy fun ❄️🎮
     """
     await message.answer(text, parse_mode="HTML", reply_markup=get_main_keyboard())
 
-# --- SERVER & STARTUP ---
+# --- SERVER LIFECYCLE (FIXED UNCLOSED SESSION) ---
 async def home(request): return web.Response(text="Bot Running")
-async def create_invoice(request): return web.json_response({"result": "TODO"}) # Placeholder
+async def create_invoice(request): return web.json_response({"result": "TODO"})
 
 async def daily_task():
     # Auto Broadcast Code
@@ -296,8 +294,11 @@ async def on_startup(bot: Bot):
     scheduler.start()
 
 async def on_shutdown(bot: Bot):
+    logging.info("Shutting down bot...")
     await bot.delete_webhook()
     scheduler.shutdown()
+    # 🔴 এই লাইনটি আপনার এরর ফিক্স করবে (Session Close)
+    await bot.session.close()
 
 def main():
     dp.startup.register(on_startup)
