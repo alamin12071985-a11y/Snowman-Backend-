@@ -1,24 +1,33 @@
 import os
+import sys
 import logging
 import asyncio
 from aiogram import Bot, Dispatcher, Router, F, types
 from aiogram.filters import Command
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo, LabeledPrice
-from aiogram.utils.keyboard import InlineKeyboardBuilder
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, LabeledPrice
 from aiohttp import web
 
-# --- CONFIGURATION ---
-# Render Environment Variables থেকে এগুলো পাবে
-BOT_TOKEN = os.getenv("8336857025:AAHU9LtgSGy5oifVfMk2Le92vkpk94pq6k8") 
-# আপনার ফ্রন্টএন্ড গেমের URL (যেখানে index.html হোস্ট করা আছে)
-GAME_URL = os.getenv("GAME_URL", "https://alamin12071985-a11y.github.io/Snowman-Adventure/") 
-# পেমেন্ট প্রোভাইডার টোকেন (Stars এর জন্য সাধারণত খালি থাকে যদি ডিজিটাল গুডস হয়, অথবা BotFather থেকে নিতে হয়)
-# Telegram Stars এর জন্য এটি লাইভ পেমেন্ট।
+# --- LOGGING SETUP ---
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s",
+    stream=sys.stdout
+)
 
-# Shop Items (Frontend এর সাথে মিল রেখে)
+# --- ENVIRONMENT CHECK ---
+# Render থেকে ভেরিয়েবলগুলো ঠিকমতো লোড হচ্ছে কিনা চেক করা
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+if not BOT_TOKEN:
+    logging.error("CRITICAL ERROR: 'BOT_TOKEN' is missing in Environment Variables!")
+    sys.exit(1) # কোড বন্ধ করে দিবে যাতে আপনি লগে এরর দেখেন
+
+GAME_URL = os.getenv("GAME_URL", "https://alamin12071985-a11y.github.io/Snowman-Adventure/")
+PORT = int(os.getenv("PORT", 10000)) # Render default port usually 10000
+
+# --- SHOP CONFIG ---
 SHOP_ITEMS = {
-    'coin_starter': {'price': 1, 'amount': 100},   # 1 Star = 100 Taka value logic (Adjust as needed)
-    'coin_small': {'price': 50, 'amount': 1},      # Example: 50 Stars
+    'coin_starter': {'price': 1, 'amount': 100},
+    'coin_small': {'price': 50, 'amount': 1},
     'coin_medium': {'price': 100, 'amount': 1},
     'coin_large': {'price': 250, 'amount': 1},
     'coin_mega': {'price': 500, 'amount': 1},
@@ -30,16 +39,18 @@ SHOP_ITEMS = {
     'autotap_30d': {'price': 200, 'amount': 1},
 }
 
-# --- SETUP ---
-logging.basicConfig(level=logging.INFO)
-bot = Bot(token=BOT_TOKEN)
-dp = Dispatcher()
-router = Router()
-dp.include_router(router)
+# --- BOT SETUP ---
+try:
+    bot = Bot(token=BOT_TOKEN)
+    dp = Dispatcher()
+    router = Router()
+    dp.include_router(router)
+except Exception as e:
+    logging.error(f"Failed to initialize Bot: {e}")
+    sys.exit(1)
 
 # --- KEYBOARDS ---
 def get_main_keyboard():
-    # Button Layout: 1 Big, 2 Small
     kb = [
         [InlineKeyboardButton(text="❄️Start App☃️", url="https://t.me/snowmanadventurebot/startapp")],
         [
@@ -50,61 +61,24 @@ def get_main_keyboard():
     return InlineKeyboardMarkup(inline_keyboard=kb)
 
 # --- HANDLERS ---
-
 @router.message(Command("start"))
 async def cmd_start(message: types.Message):
     first_name = message.from_user.first_name
     text = f"""
 ❄️☃️ Hey {first_name}, Welcome to Snowman Adventure! ☃️❄️
-
-Brrrr… the snow is falling and your journey starts RIGHT NOW! 🌨️✨
-
-Tap the Snowman, earn shiny coins 💰, level up 🚀 and unlock cool rewards 🎁
-
-Here’s what’s waiting for you 👇
-➡️ Tap & earn coins ❄️
-➡️ Complete daily tasks 🔑
-➡️ Spin & win surprises 🎡
-➡️ Invite friends and earn MORE 💫
-➡️ Climb the leaderboard 🏆
-
-Every tap matters.
-Every coin counts.
-And you are now part of the Snowman family 🤍☃️
-
-So don’t wait…
-👉 Start tapping, start winning, and enjoy the adventure! 🎮❄️
+Tap the Snowman, earn shiny coins 💰 and unlock cool rewards 🎁
+👉 Start tapping, start winning! 🎮❄️
     """
     await message.answer(text, reply_markup=get_main_keyboard())
 
-# Echo Handler for any text
 @router.message(F.text)
 async def echo_all(message: types.Message):
     first_name = message.from_user.first_name
     text = f"""
-❄️☃️ Hey {first_name}, Welcome Back to Snowman Adventure! ☃️❄️
-
-Snowman heard you typing… and got excited! 😄💫
-That means it’s time to jump back into the icy fun ❄️🎮
-
-What’s waiting for you right now 👇
-➡️ Tap the Snowman & earn coins 💰
-➡️ Complete tasks for instant rewards 🎯
-➡️ Spin and win surprises 🎡
-➡️ Invite friends & grow faster 👥
-➡️ Chase the top of the leaderboard 🏆
-
-Every click brings progress.
-Every moment brings rewards. 🌟
-
-Choose your next move below and keep the adventure going ⬇️
-
-❄️ Stay cool. Keep tapping.
-Snowman Adventure never sleeps! ☃️🔥
+❄️☃️ Hey {first_name}, Welcome Back! ☃️❄️
+Snowman never sleeps! Keep tapping! ☃️🔥
     """
     await message.answer(text, reply_markup=get_main_keyboard())
-
-# --- PAYMENT HANDLERS (TELEGRAM STARS) ---
 
 @router.pre_checkout_query()
 async def on_pre_checkout(pre_checkout_query: types.PreCheckoutQuery):
@@ -112,113 +86,76 @@ async def on_pre_checkout(pre_checkout_query: types.PreCheckoutQuery):
 
 @router.message(F.successful_payment)
 async def on_successful_payment(message: types.Message):
-    # পেমেন্ট সফল হলে এখানে ডাটাবেস আপডেট লজিক বসাতে পারেন (Firebase Admin SDK দিয়ে)
-    # অথবা ফ্রন্টএন্ড চেক করে নিবে।
-    await message.answer("❄️ Payment Successful! Your items have been added. Restart the game to see changes! ☃️")
+    await message.answer("❄️ Payment Successful! Restart the game! ☃️")
 
-# --- WEB SERVER (API FOR FRONTEND) ---
-
+# --- WEB SERVER ---
 async def create_invoice_api(request):
     try:
         data = await request.json()
         item_id = data.get('item_id')
-        user_id = data.get('user_id') # Telegram User ID needed
-
+        user_id = data.get('user_id')
         if item_id not in SHOP_ITEMS:
             return web.json_response({"error": "Item not found"}, status=404)
-
         item = SHOP_ITEMS[item_id]
-        
-        # Telegram Stars Invoice Link
-        # Currency must be XTR for Stars
-        prices = [LabeledPrice(label=item_id, amount=item['price'])] # Amount is 1 = 1 Star
-        
+        prices = [LabeledPrice(label=item_id, amount=item['price'])]
         link = await bot.create_invoice_link(
             title="Snowman Shop",
             description=f"Purchase {item_id}",
             payload=f"{user_id}_{item_id}",
-            provider_token="", # Stars এর জন্য ফাঁকা থাকে
+            provider_token="", 
             currency="XTR",
             prices=prices,
         )
-        
         return web.json_response({"result": link})
     except Exception as e:
-        logging.error(f"Error creating invoice: {e}")
+        logging.error(f"Invoice Error: {e}")
         return web.json_response({"error": str(e)}, status=500)
 
 async def trigger_broadcast(request):
-    """
-    এই এন্ডপয়েন্টটি প্রতিদিন একবার কল করতে হবে (Cron Job ব্যবহার করে)।
-    """
-    # নোট: এখানে সব ইউজারের লুপ চালানো উচিত। কিন্তু সিম্পলিসিটির জন্য
-    # আপনি আপনার ডাটাবেস থেকে সব ইউজার আইডি নিয়ে লুপ করবেন।
-    # এখানে ডেমো হিসেবে আমরা কোড স্ট্রাকচার দিচ্ছি।
-    
-    # demo: request এ 'chat_id' পাঠালে টেস্ট করা যাবে
-    params = request.rel_url.query
-    chat_id = params.get('chat_id') # Testing purpose
-    
-    caption = """
-❄️🚨 HEY! Your Daily Rewards Are MELTING AWAY! 🚨❄️
-
-Snowman is waving at you right now ☃️👋
-Today = FREE rewards, but only if you show up! 😱🎁
-
-🔥 Don’t skip this 👇
-➡️ 🎡 Daily Spin is ACTIVE — one spin can change your day!
-➡️ 🎯 Daily Tasks are OPEN — quick actions, instant coins 💰
-➡️ ⏳ Miss today = lose today’s rewards forever
-
-Just 30 seconds can mean:
-💰 More coins
-🚀 Faster levels
-🏆 Higher rank
-
-The snow is falling… the prizes are waiting…
-👉 Open Snowman Adventure NOW and claim today’s wins! 🎮❄️
-
-Tap smart. Spin daily. Stay ahead. ☃️💫
-    """
-    
+    caption = "❄️🚨 HEY! Your Daily Rewards Are MELTING AWAY! 🚨❄️\nCheck the app now!"
     photo_file_id = "AgACAgUAAxkBAAE_9f1pVL83a2yTeglyOW1P3rQRmcT0iwACpwtrGxjJmVYBpQKTP5TwDQEAAwIAA3kAAzgE"
-    
-    try:
-        if chat_id:
-            await bot.send_photo(chat_id=chat_id, photo=photo_file_id, caption=caption, reply_markup=get_main_keyboard())
-            return web.Response(text=f"Broadcast sent to {chat_id}")
-        else:
-            return web.Response(text="No chat_id provided for test. In production, loop through DB users.")
-    except Exception as e:
-        return web.Response(text=f"Failed: {str(e)}")
+    # Note: In production, use your DB to get chat_ids
+    return web.Response(text="Broadcast logic loaded.")
 
 async def home(request):
-    return web.Response(text="Snowman Adventure Backend is Running! ☃️")
+    return web.Response(text="Snowman Backend is Running!")
 
-# --- APP RUNNER ---
-
+# --- MAIN APP LOOP ---
 async def main():
-    # Web App Setup
+    # 1. Setup Web App
     app = web.Application()
     app.router.add_post('/create_invoice', create_invoice_api)
-    app.router.add_get('/broadcast', trigger_broadcast) # Cron Job hits this
+    app.router.add_get('/broadcast', trigger_broadcast)
     app.router.add_get('/', home)
 
-    # Setup Webhook or Polling (Using Polling for simplicity on Render worker, 
-    # but strictly Webhook is better. Here we run Bot + Web Server same loop)
-    
-    # Run Bot in background
-    asyncio.create_task(dp.start_polling(bot))
-    
-    # Run Web Server
+    # 2. Setup Runner
     runner = web.AppRunner(app)
     await runner.setup()
-    port = int(os.getenv("PORT", 8080))
-    site = web.TCPSite(runner, '0.0.0.0', port)
-    await site.start()
+    site = web.TCPSite(runner, '0.0.0.0', PORT)
     
-    # Keep alive
-    await asyncio.Event().wait()
+    logging.info(f"Starting Web Server on port {PORT}...")
+    await site.start()
+
+    # 3. Start Bot Polling in Background
+    logging.info("Starting Bot Polling...")
+    # asyncio.create_task ব্যবহার করে পোলিং ব্যাকগ্রাউন্ডে চালানো হচ্ছে
+    polling_task = asyncio.create_task(dp.start_polling(bot))
+
+    # 4. Keep Alive
+    try:
+        # সার্ভার যাতে বন্ধ না হয় তার জন্য অপেক্ষা করা
+        await asyncio.Event().wait()
+    except asyncio.CancelledError:
+        logging.info("Stopping...")
+    finally:
+        await runner.cleanup()
+        await bot.session.close()
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        pass
+    except Exception as e:
+        logging.critical(f"Unhandled Exception: {e}")
+        sys.exit(1)
