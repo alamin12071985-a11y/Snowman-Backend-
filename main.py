@@ -3,38 +3,35 @@ import sys
 import logging
 import asyncio
 import sqlite3
-import html  # HTML নাম ফিক্স করার জন্য
+import html
 from datetime import datetime
 from aiohttp import web
 from aiogram import Bot, Dispatcher, Router, F, types
 from aiogram.filters import Command
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, LabeledPrice
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, LabeledPrice, CallbackQuery
 from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from aiogram.fsm.storage.memory import MemoryStorage
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
 
-# --- LOGGING SETUP (বিস্তারিত এরর দেখার জন্য) ---
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(levelname)s - %(message)s",
-    stream=sys.stdout
-)
+# --- LOGGING SETUP ---
+logging.basicConfig(level=logging.INFO, stream=sys.stdout)
 
 # --- CONFIGURATION ---
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 APP_URL = os.getenv("APP_URL")
+# Render Environment এ ADMIN_IDS সেট করুন (যেমন: 12345678, 87654321)
+ADMIN_IDS = [int(id.strip()) for id in os.getenv("ADMIN_IDS", "0").split(",") if id.strip().isdigit()]
 
-if not BOT_TOKEN:
-    logging.error("❌ CRITICAL: BOT_TOKEN is missing!")
-    sys.exit(1)
-
-if not APP_URL:
-    logging.error("❌ CRITICAL: APP_URL is missing!")
+if not BOT_TOKEN or not APP_URL:
+    logging.error("❌ CRITICAL: Environment variables missing!")
     sys.exit(1)
 
 WEBHOOK_PATH = "/webhook"
 WEBHOOK_URL = f"{APP_URL}{WEBHOOK_PATH}"
 
-# --- DATABASE SETUP (Safe Mode) ---
+# --- DATABASE SETUP ---
 DB_FILE = "snowman_users.db"
 
 def init_db():
@@ -44,12 +41,10 @@ def init_db():
         cursor.execute('''CREATE TABLE IF NOT EXISTS users (user_id INTEGER PRIMARY KEY)''')
         conn.commit()
         conn.close()
-        logging.info("✅ Database initialized successfully.")
     except Exception as e:
-        logging.error(f"❌ Database Init Error: {e}")
+        logging.error(f"DB Init Error: {e}")
 
 def add_user(user_id):
-    """সেফলি ইউজার এড করার ফাংশন"""
     try:
         conn = sqlite3.connect(DB_FILE)
         cursor = conn.cursor()
@@ -57,7 +52,7 @@ def add_user(user_id):
         conn.commit()
         conn.close()
     except Exception as e:
-        logging.error(f"⚠️ Failed to add user to DB: {e}")
+        logging.error(f"DB Add User Error: {e}")
 
 def get_all_users():
     try:
@@ -67,237 +62,274 @@ def get_all_users():
         users = [row[0] for row in cursor.fetchall()]
         conn.close()
         return users
-    except Exception as e:
-        logging.error(f"⚠️ Failed to fetch users: {e}")
+    except:
         return []
 
-# --- SHOP ITEMS ---
-SHOP_ITEMS = {
-    'coin_starter': {'price': 10, 'amount': 100},
-    'coin_small': {'price': 50, 'amount': 1},
-    'coin_medium': {'price': 100, 'amount': 1},
-    'coin_large': {'price': 250, 'amount': 1},
-    'coin_mega': {'price': 500, 'amount': 1},
-}
+# --- STATES ---
+class BroadcastState(StatesGroup):
+    dashboard = State()
+    waiting_media = State()
+    waiting_text = State()
+    waiting_buttons = State()
 
 # --- BOT INIT ---
+storage = MemoryStorage()
 bot = Bot(token=BOT_TOKEN)
-dp = Dispatcher()
+dp = Dispatcher(storage=storage)
 router = Router()
 dp.include_router(router)
 scheduler = AsyncIOScheduler()
 
-# --- KEYBOARD ---
+# --- KEYBOARDS ---
 def get_main_keyboard():
     kb = [
         [InlineKeyboardButton(text="❄️ Start App ☃️", url="https://t.me/snowmanadventurebot?startapp")],
-        [
-            InlineKeyboardButton(text="❄️ Join Channel 🎯", url="https://t.me/snowmanadventurecommunity"),
-            InlineKeyboardButton(text="❄️ Discussion Group 🥶", url="https://t.me/snowmanadventurediscuss")
-        ]
+        [InlineKeyboardButton(text="❄️ Channel 🎯", url="https://t.me/snowmanadventurecommunity")]
     ]
     return InlineKeyboardMarkup(inline_keyboard=kb)
 
-# --- HANDLERS ---
+def get_admin_dashboard_kb():
+    kb = [
+        [InlineKeyboardButton(text="🖼️ Set Media", callback_data="adm_media"), InlineKeyboardButton(text="📝 Set Text", callback_data="adm_text")],
+        [InlineKeyboardButton(text="⌨️ Set Buttons", callback_data="adm_buttons")],
+        [InlineKeyboardButton(text="👀 Full Preview", callback_data="adm_preview")],
+        [InlineKeyboardButton(text="🚀 Send Broadcast", callback_data="adm_send")]
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=kb)
+
+def get_cancel_kb():
+    return InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🔙 Back to Dashboard", callback_data="adm_back")]])
+
+# --- USER HANDLERS ---
 
 @router.message(Command("start"))
 async def cmd_start(message: types.Message):
-    try:
-        user_id = message.from_user.id
-        # নাম Escape করা হচ্ছে যাতে HTML এরর না হয়
-        first_name = html.escape(message.from_user.first_name)
-        
-        # ডাটাবেসে সেভ
-        add_user(user_id)
-        
-        text = f"""
-❄️☃️ <b>Hey {first_name}, Welcome to Snowman Adventure!</b> ☃️❄️
-
-Brrrr… the snow is falling and your journey starts <b>RIGHT NOW!</b> 🌨️✨
-
-<b>Tap the Snowman, earn shiny coins 💰, level up 🚀 and unlock cool rewards 🎁</b>
-
-<blockquote>👉 <b>Tap & Earn:</b> Collect coins instantly ❄️
-👉 <b>Daily Tasks:</b> Complete and win 🔑
-👉 <b>Lucky Spin:</b> Spin & win surprises 🎡
-👉 <b>Invite Friends:</b> Earn MORE rewards 💫
-👉 <b>Leaderboard:</b> Climb to the top 🏆</blockquote>
-
-Every tap matters. Every coin counts.
-And you are now part of the <b>Snowman family</b> 🤍☃️
-
-👇 <b>Start Your Journey Below</b> 👇
-        """
-        await message.answer(text, parse_mode="HTML", reply_markup=get_main_keyboard())
-        logging.info(f"✅ Sent WELCOME message to {user_id}")
-
-    except Exception as e:
-        logging.error(f"❌ Error in /start command: {e}")
-
-@router.message(F.text)
-async def echo_all(message: types.Message):
-    try:
-        user_id = message.from_user.id
-        first_name = html.escape(message.from_user.first_name)
-        
-        logging.info(f"📩 Received text from {user_id}: {message.text}")
-
-        text = f"""
-❄️☃️ <b>Hey {first_name}, Welcome Back!</b> ☃️❄️
-
-Snowman heard you typing… and got excited! 😄💫
-That means it’s time to jump back into the icy fun ❄️🎮
-
-<b>Here is your current status update:</b>
-
-<blockquote>➡️ <b>Tap the Snowman:</b> Earn coins 💰
-➡️ <b>Complete Tasks:</b> Get instant rewards 🎯
-➡️ <b>Spin the Wheel:</b> Win surprises 🎡
-➡️ <b>Invite Friends:</b> Grow faster 👥
-➡️ <b>Rank Up:</b> Chase the top spot 🏆</blockquote>
-
-Every click brings progress.
-Every moment brings rewards. 🌟
-
-<b>Choose your next move below and keep the adventure going ⬇️</b>
-
-❄️ <i>Stay cool. Keep tapping. Snowman Adventure never sleeps!</i> ☃️🔥
-        """
-        await message.answer(text, parse_mode="HTML", reply_markup=get_main_keyboard())
-        logging.info(f"✅ Sent REPLY message to {user_id}")
-
-    except Exception as e:
-        logging.error(f"❌ Error in echo_all handler: {e}")
-
-# --- PAYMENT ---
-@router.pre_checkout_query()
-async def on_pre_checkout(pre_checkout_query: types.PreCheckoutQuery):
-    await bot.answer_pre_checkout_query(pre_checkout_query.id, ok=True)
-
-@router.message(F.successful_payment)
-async def on_successful_payment(message: types.Message):
-    try:
-        await message.answer(
-            "<blockquote>❄️ <b>Payment Successful!</b>\nYour items have been added. Restart the game to see changes! ☃️</blockquote>", 
-            parse_mode="HTML"
-        )
-    except Exception as e:
-        logging.error(f"Payment Msg Error: {e}")
-
-# --- BROADCAST ---
-async def send_daily_broadcast():
-    logging.info("⏳ Starting Daily Broadcast...")
-    users = get_all_users()
+    user_id = message.from_user.id
+    add_user(user_id)
+    first_name = html.escape(message.from_user.first_name)
     
-    if not users:
-        logging.info("⚠️ No users found for broadcast.")
+    text = f"""
+❄️☃️ <b>Hey {first_name}, Welcome!</b> ☃️❄️
+Tap the button below to start your adventure!
+    """
+    await message.answer(text, parse_mode="HTML", reply_markup=get_main_keyboard())
+
+# --- ADMIN PANEL HANDLERS ---
+
+@router.message(Command("admin"))
+async def cmd_admin(message: types.Message, state: FSMContext):
+    if message.from_user.id not in ADMIN_IDS:
+        return
+    
+    # Set Default Data
+    await state.update_data(
+        media_id=None,
+        media_type=None,
+        text="❄️ <b>Default Broadcast Message</b>\n\nThis is a test message. Edit me using the panel!",
+        buttons=[]
+    )
+    await state.set_state(BroadcastState.dashboard)
+    await message.answer("🛠 <b>Admin Broadcast Panel</b>\nSelect an option to configure:", parse_mode="HTML", reply_markup=get_admin_dashboard_kb())
+
+# --- DASHBOARD CALLBACKS ---
+
+@router.callback_query(BroadcastState.dashboard, F.data == "adm_media")
+async def cb_media(call: CallbackQuery, state: FSMContext):
+    await state.set_state(BroadcastState.waiting_media)
+    await call.message.edit_text("🖼️ <b>Send me a Photo or Video.</b>\n\n(Click Back to cancel)", parse_mode="HTML", reply_markup=get_cancel_kb())
+
+@router.callback_query(BroadcastState.dashboard, F.data == "adm_text")
+async def cb_text(call: CallbackQuery, state: FSMContext):
+    await state.set_state(BroadcastState.waiting_text)
+    await call.message.edit_text("📝 <b>Send me the Message Text.</b>\n\nHTML formatting is supported.", parse_mode="HTML", reply_markup=get_cancel_kb())
+
+@router.callback_query(BroadcastState.dashboard, F.data == "adm_buttons")
+async def cb_buttons(call: CallbackQuery, state: FSMContext):
+    await state.set_state(BroadcastState.waiting_buttons)
+    await call.message.edit_text(
+        "⌨️ <b>Send Buttons in this format:</b>\n\n"
+        "<code>Button Name - Link</code>\n"
+        "<code>Join Channel - @channel_username</code>\n\n"
+        "Send 'clear' to remove buttons.", 
+        parse_mode="HTML", reply_markup=get_cancel_kb()
+    )
+
+@router.callback_query(F.data == "adm_back")
+async def cb_back(call: CallbackQuery, state: FSMContext):
+    await state.set_state(BroadcastState.dashboard)
+    await call.message.delete()
+    await call.message.answer("🛠 <b>Admin Broadcast Panel</b>", parse_mode="HTML", reply_markup=get_admin_dashboard_kb())
+
+# --- INPUT PROCESSING ---
+
+@router.message(BroadcastState.waiting_media)
+async def process_media(message: types.Message, state: FSMContext):
+    if message.photo:
+        await state.update_data(media_id=message.photo[-1].file_id, media_type='photo')
+        await message.answer("✅ <b>Photo Saved!</b>", parse_mode="HTML", reply_markup=get_admin_dashboard_kb())
+    elif message.video:
+        await state.update_data(media_id=message.video.file_id, media_type='video')
+        await message.answer("✅ <b>Video Saved!</b>", parse_mode="HTML", reply_markup=get_admin_dashboard_kb())
+    else:
+        await message.answer("⚠️ Please send a Photo or Video.", reply_markup=get_cancel_kb())
+        return
+    await state.set_state(BroadcastState.dashboard)
+
+@router.message(BroadcastState.waiting_text)
+async def process_text(message: types.Message, state: FSMContext):
+    # Use html_text to preserve bold/italic from user input
+    final_text = message.html_text if message.html_text else html.escape(message.text)
+    await state.update_data(text=final_text)
+    await message.answer("✅ <b>Text Saved!</b>", parse_mode="HTML", reply_markup=get_admin_dashboard_kb())
+    await state.set_state(BroadcastState.dashboard)
+
+@router.message(BroadcastState.waiting_buttons)
+async def process_buttons(message: types.Message, state: FSMContext):
+    text = message.text.strip()
+    
+    if text.lower() == 'clear':
+        await state.update_data(buttons=[])
+        await message.answer("✅ Buttons Cleared!", reply_markup=get_admin_dashboard_kb())
+        await state.set_state(BroadcastState.dashboard)
         return
 
+    # Button Parser
+    buttons = []
+    lines = text.split('\n')
+    for line in lines:
+        if '-' in line:
+            parts = line.split('-', 1)
+            btn_txt = parts[0].strip()
+            btn_url = parts[1].strip()
+            
+            # Handle @username links
+            if btn_url.startswith('@'):
+                btn_url = f"https://t.me/{btn_url[1:]}"
+            elif not btn_url.startswith('http'):
+                btn_url = f"https://{btn_url}"
+                
+            buttons.append([btn_txt, btn_url])
+    
+    if buttons:
+        await state.update_data(buttons=buttons)
+        await message.answer(f"✅ <b>{len(buttons)} Buttons Saved!</b>", parse_mode="HTML", reply_markup=get_admin_dashboard_kb())
+        await state.set_state(BroadcastState.dashboard)
+    else:
+        await message.answer("⚠️ Invalid Format. Try:\n<code>Click Me - https://google.com</code>", parse_mode="HTML", reply_markup=get_cancel_kb())
+
+# --- PREVIEW & SEND ---
+
+@router.callback_query(BroadcastState.dashboard, F.data == "adm_preview")
+async def cb_preview(call: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    
+    # Build Keyboard
+    kb_rows = []
+    for txt, url in data['buttons']:
+        kb_rows.append([InlineKeyboardButton(text=txt, url=url)])
+    markup = InlineKeyboardMarkup(inline_keyboard=kb_rows) if kb_rows else None
+    
+    # Send Preview
+    try:
+        if data['media_id']:
+            if data['media_type'] == 'photo':
+                await call.message.answer_photo(photo=data['media_id'], caption=data['text'], parse_mode="HTML", reply_markup=markup)
+            elif data['media_type'] == 'video':
+                await call.message.answer_video(video=data['media_id'], caption=data['text'], parse_mode="HTML", reply_markup=markup)
+        else:
+            await call.message.answer(data['text'], parse_mode="HTML", reply_markup=markup)
+            
+        await call.message.answer("👆 <b>This is the Preview.</b>\nClick 'Send Broadcast' to publish.", parse_mode="HTML", reply_markup=get_admin_dashboard_kb())
+    except Exception as e:
+        await call.message.answer(f"⚠️ Preview Error: {e}", reply_markup=get_admin_dashboard_kb())
+    
+    await call.answer()
+
+@router.callback_query(BroadcastState.dashboard, F.data == "adm_send")
+async def cb_send(call: CallbackQuery, state: FSMContext):
+    users = get_all_users()
+    data = await state.get_data()
+    
+    if not users:
+        await call.answer("No users in database!", show_alert=True)
+        return
+
+    await call.message.edit_text(f"🚀 <b>Broadcasting to {len(users)} users...</b>", parse_mode="HTML")
+    
+    # Prepare Content
+    kb_rows = []
+    for txt, url in data['buttons']:
+        kb_rows.append([InlineKeyboardButton(text=txt, url=url)])
+    markup = InlineKeyboardMarkup(inline_keyboard=kb_rows) if kb_rows else None
+    
+    success = 0
+    blocked = 0
+    
+    for user_id in users:
+        try:
+            if data['media_id']:
+                if data['media_type'] == 'photo':
+                    await bot.send_photo(user_id, data['media_id'], caption=data['text'], parse_mode="HTML", reply_markup=markup)
+                elif data['media_type'] == 'video':
+                    await bot.send_video(user_id, data['media_id'], caption=data['text'], parse_mode="HTML", reply_markup=markup)
+            else:
+                await bot.send_message(user_id, data['text'], parse_mode="HTML", reply_markup=markup)
+            success += 1
+            await asyncio.sleep(0.05) # Rate limit safety
+        except Exception:
+            blocked += 1
+            
+    await call.message.answer(
+        f"✅ <b>Broadcast Complete!</b>\n\n"
+        f"🟢 Sent: {success}\n"
+        f"🔴 Failed/Blocked: {blocked}",
+        parse_mode="HTML"
+    )
+    await state.clear()
+
+# --- AUTO BROADCAST (DAILY) ---
+async def daily_broadcast_task():
+    logging.info("⏰ Running Daily Auto-Broadcast...")
+    users = get_all_users()
+    if not users: return
+    
     caption = """
 ❄️🚨 <b>HEY! Your Daily Rewards Are MELTING AWAY!</b> 🚨❄️
-
 Snowman is waving at you right now ☃️👋
 Today = <b>FREE rewards</b>, but only if you show up! 😱🎁
 
-<blockquote>➡️ 🎡 <b>Daily Spin is ACTIVE:</b>
-One spin can change your day!
-
-➡️ 🎯 <b>Daily Tasks are OPEN:</b>
-Quick actions, instant coins 💰
-
-➡️ ⏳ <b>Warning:</b>
-Miss today = lose today’s rewards forever</blockquote>
-
-Just 30 seconds can mean:
-💰 More coins | 🚀 Faster levels | 🏆 Higher rank
-
-The snow is falling… the prizes are waiting…
-👉 <b>Open Snowman Adventure NOW and claim today’s wins! 🎮❄️</b>
+👉 <b>Open App Now!</b>
     """
+    # Auto Broadcast এর জন্য একটি ডিফল্ট ফটো আইডি দিন
+    photo_id = "AgACAgUAAxkBAAE_9f1pVL83a2yTeglyOW1P3rQRmcT0iwACpwtrGxjJmVYBpQKTP5TwDQEAAwIAA3kAAzgE"
     
-    photo_file_id = "AgACAgUAAxkBAAE_9f1pVL83a2yTeglyOW1P3rQRmcT0iwACpwtrGxjJmVYBpQKTP5TwDQEAAwIAA3kAAzgE"
-    
-    success_count = 0
     for user_id in users:
         try:
-            await bot.send_photo(
-                chat_id=user_id, 
-                photo=photo_file_id, 
-                caption=caption, 
-                parse_mode="HTML", 
-                reply_markup=get_main_keyboard()
-            )
-            success_count += 1
-            await asyncio.sleep(0.05) 
-        except Exception as e:
-            logging.error(f"❌ Failed to send to {user_id}: {e}")
-            
-    logging.info(f"✅ Broadcast finished. Sent to {success_count} users.")
+            await bot.send_photo(user_id, photo_id, caption=caption, parse_mode="HTML", reply_markup=get_main_keyboard())
+            await asyncio.sleep(0.05)
+        except: pass
 
-# --- SERVER ROUTES ---
-async def create_invoice_api(request):
-    try:
-        data = await request.json()
-        item_id = data.get('item_id')
-        user_id = data.get('user_id')
-        
-        if item_id not in SHOP_ITEMS:
-            return web.json_response({"error": "Item not found"}, status=404)
-        
-        item = SHOP_ITEMS[item_id]
-        prices = [LabeledPrice(label=item_id, amount=item['price'])]
-        
-        link = await bot.create_invoice_link(
-            title="Snowman Shop",
-            description=f"Purchase {item_id}",
-            payload=f"{user_id}_{item_id}",
-            provider_token="",
-            currency="XTR",
-            prices=prices,
-        )
-        return web.json_response({"result": link})
-    except Exception as e:
-        logging.error(f"Invoice API Error: {e}")
-        return web.json_response({"error": str(e)}, status=500)
+# --- SERVER ---
+async def home(request): return web.Response(text="Bot is Live")
 
-async def trigger_broadcast_manual(request):
-    asyncio.create_task(send_daily_broadcast())
-    return web.Response(text="🚀 Broadcast started manually!")
-
-async def home(request):
-    return web.Response(text="⛄ Snowman Bot is Running! ❄️")
-
-# --- LIFECYCLE ---
 async def on_startup(bot: Bot):
     await bot.set_webhook(WEBHOOK_URL)
     init_db()
-    # Schedule: Every day at 08:00 AM
-    scheduler.add_job(send_daily_broadcast, 'cron', hour=8, minute=0)
+    scheduler.add_job(daily_broadcast_task, 'cron', hour=8, minute=0)
     scheduler.start()
-    logging.info(f"✅ Webhook set: {WEBHOOK_URL}")
 
 async def on_shutdown(bot: Bot):
     await bot.delete_webhook()
     scheduler.shutdown()
-    logging.info("🛑 Bot Stopped")
 
-# --- MAIN ---
 def main():
     dp.startup.register(on_startup)
     dp.shutdown.register(on_shutdown)
-
     app = web.Application()
-    app.router.add_post('/create_invoice', create_invoice_api)
-    app.router.add_get('/broadcast', trigger_broadcast_manual)
     app.router.add_get('/', home)
-
-    webhook_handler = SimpleRequestHandler(dispatcher=dp, bot=bot)
-    webhook_handler.register(app, path=WEBHOOK_PATH)
-    
+    SimpleRequestHandler(dispatcher=dp, bot=bot).register(app, path=WEBHOOK_PATH)
     setup_application(app, dp, bot=bot)
-
-    port = int(os.getenv("PORT", 10000))
-    web.run_app(app, host="0.0.0.0", port=port)
+    web.run_app(app, host="0.0.0.0", port=int(os.getenv("PORT", 10000)))
 
 if __name__ == "__main__":
     main()
