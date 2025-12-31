@@ -1,326 +1,224 @@
 import os
-import json
-import time
-import random
-import hmac
-import hashlib
-from urllib.parse import unquote
-import requests
-from flask import Flask, request, jsonify
-from flask_cors import CORS
-from dotenv import load_dotenv
-import firebase_admin
-from firebase_admin import credentials, db
+import logging
+import asyncio
+from aiogram import Bot, Dispatcher, Router, F, types
+from aiogram.filters import Command
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo, LabeledPrice
+from aiogram.utils.keyboard import InlineKeyboardBuilder
+from aiohttp import web
 
-# এনভায়রনমেন্ট ভেরিয়েবল লোড করা
-load_dotenv()
+# --- CONFIGURATION ---
+# Render Environment Variables থেকে এগুলো পাবে
+BOT_TOKEN = os.getenv("8336857025:AAHU9LtgSGy5oifVfMk2Le92vkpk94pq6k8") 
+# আপনার ফ্রন্টএন্ড গেমের URL (যেখানে index.html হোস্ট করা আছে)
+GAME_URL = os.getenv("GAME_URL", "https://alamin12071985-a11y.github.io/Snowman-Adventure/") 
+# পেমেন্ট প্রোভাইডার টোকেন (Stars এর জন্য সাধারণত খালি থাকে যদি ডিজিটাল গুডস হয়, অথবা BotFather থেকে নিতে হয়)
+# Telegram Stars এর জন্য এটি লাইভ পেমেন্ট।
 
-app = Flask(__name__)
-CORS(app, resources={r"/*": {"origins": "*"}})
-
-# --- কনফিগারেশন ---
-BOT_TOKEN = os.getenv("8336857025:AAHU9LtgSGy5oifVfMk2Le92vkpk94pq6k8")
-ADMIN_ID = os.getenv("7605281774")
-FIREBASE_DB_URL = "https://snowman-adventure-4fa71-default-rtdb.firebaseio.com"
-BASE_URL = f"https://api.telegram.org/bot{BOT_TOKEN}"
-
-GAME_URL = "https://alamin12071985-a11y.github.io/Snowman-Adventure/"
-GROUP_URL = "https://t.me/snowmanadventurediscuss"
-CHANNEL_URL = "https://t.me/snowmanadventurecommunity"
-
-# সার্ভার স্টার্ট হওয়ার সময় টোকেন চেক করা
-if not BOT_TOKEN:
-    print("❌ ERROR: BOT_TOKEN is missing!")
-else:
-    print(f"✅ Bot Token Loaded: {BOT_TOKEN[:5]}*******")
-
-# --- Firebase ইনিশিয়ালাইজেশন ---
-try:
-    if not firebase_admin._apps:
-        firebase_key_json = os.getenv("FIREBASE_KEY")
-        if firebase_key_json:
-            cred_dict = json.loads(firebase_key_json)
-            cred = credentials.Certificate(cred_dict)
-        else:
-            if os.path.exists("firebase-adminsdk.json"):
-                cred = credentials.Certificate("firebase-adminsdk.json")
-            else:
-                raise Exception("Firebase credentials not found!")
-
-        firebase_admin.initialize_app(cred, {'databaseURL': FIREBASE_DB_URL})
-        print("✅ Firebase connected successfully!")
-except Exception as e:
-    print(f"❌ Firebase Error: {e}")
-
-# --- শপ ডেটা ---
+# Shop Items (Frontend এর সাথে মিল রেখে)
 SHOP_ITEMS = {
-    'coin_starter': {'stars': 10, 'reward': 5000, 'type': 'coin'},
-    'coin_small': {'stars': 20, 'reward': 10000, 'type': 'coin'},
-    'coin_medium': {'stars': 60, 'reward': 40000, 'type': 'coin'},
-    'coin_large': {'stars': 120, 'reward': 100000, 'type': 'coin'},
-    'coin_mega': {'stars': 220, 'reward': 220000, 'type': 'coin'},
-    'booster_3d': {'stars': 20, 'type': 'booster', 'duration': 3},
-    'booster_15d': {'stars': 70, 'type': 'booster', 'duration': 15},
-    'booster_30d': {'stars': 120, 'type': 'booster', 'duration': 30},
-    'autotap_1d': {'stars': 20, 'type': 'autotap', 'duration': 1},
-    'autotap_7d': {'stars': 80, 'type': 'autotap', 'duration': 7},
-    'autotap_30d': {'stars': 200, 'type': 'autotap', 'duration': 30},
+    'coin_starter': {'price': 1, 'amount': 100},   # 1 Star = 100 Taka value logic (Adjust as needed)
+    'coin_small': {'price': 50, 'amount': 1},      # Example: 50 Stars
+    'coin_medium': {'price': 100, 'amount': 1},
+    'coin_large': {'price': 250, 'amount': 1},
+    'coin_mega': {'price': 500, 'amount': 1},
+    'booster_3d': {'price': 20, 'amount': 1},
+    'booster_15d': {'price': 70, 'amount': 1},
+    'booster_30d': {'price': 120, 'amount': 1},
+    'autotap_1d': {'price': 20, 'amount': 1},
+    'autotap_7d': {'price': 80, 'amount': 1},
+    'autotap_30d': {'price': 200, 'amount': 1},
 }
 
-# --- SPIN WHEEL CONFIGURATION ---
-SPIN_PRIZES = [0.001, 0.005, 0.01, 0.02, 0.1, 0.5, 0.002, 0.008]
-SPIN_WEIGHTS = [40, 25, 10, 5, 1, 0.5, 15, 3.5] 
+# --- SETUP ---
+logging.basicConfig(level=logging.INFO)
+bot = Bot(token=BOT_TOKEN)
+dp = Dispatcher()
+router = Router()
+dp.include_router(router)
 
-# --- হেল্পার ফাংশন ---
-def save_bot_user(chat_id):
+# --- KEYBOARDS ---
+def get_main_keyboard():
+    # Button Layout: 1 Big, 2 Small
+    kb = [
+        [InlineKeyboardButton(text="❄️Start App☃️", url="https://t.me/snowmanadventurebot/startapp")],
+        [
+            InlineKeyboardButton(text="❄️ Channel 🎯", url="https://t.me/snowmanadventurecommunity"),
+            InlineKeyboardButton(text="❄️ Discuss 🥶", url="https://t.me/snowmanadventurediscuss")
+        ]
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=kb)
+
+# --- HANDLERS ---
+
+@router.message(Command("start"))
+async def cmd_start(message: types.Message):
+    first_name = message.from_user.first_name
+    text = f"""
+❄️☃️ Hey {first_name}, Welcome to Snowman Adventure! ☃️❄️
+
+Brrrr… the snow is falling and your journey starts RIGHT NOW! 🌨️✨
+
+Tap the Snowman, earn shiny coins 💰, level up 🚀 and unlock cool rewards 🎁
+
+Here’s what’s waiting for you 👇
+➡️ Tap & earn coins ❄️
+➡️ Complete daily tasks 🔑
+➡️ Spin & win surprises 🎡
+➡️ Invite friends and earn MORE 💫
+➡️ Climb the leaderboard 🏆
+
+Every tap matters.
+Every coin counts.
+And you are now part of the Snowman family 🤍☃️
+
+So don’t wait…
+👉 Start tapping, start winning, and enjoy the adventure! 🎮❄️
+    """
+    await message.answer(text, reply_markup=get_main_keyboard())
+
+# Echo Handler for any text
+@router.message(F.text)
+async def echo_all(message: types.Message):
+    first_name = message.from_user.first_name
+    text = f"""
+❄️☃️ Hey {first_name}, Welcome Back to Snowman Adventure! ☃️❄️
+
+Snowman heard you typing… and got excited! 😄💫
+That means it’s time to jump back into the icy fun ❄️🎮
+
+What’s waiting for you right now 👇
+➡️ Tap the Snowman & earn coins 💰
+➡️ Complete tasks for instant rewards 🎯
+➡️ Spin and win surprises 🎡
+➡️ Invite friends & grow faster 👥
+➡️ Chase the top of the leaderboard 🏆
+
+Every click brings progress.
+Every moment brings rewards. 🌟
+
+Choose your next move below and keep the adventure going ⬇️
+
+❄️ Stay cool. Keep tapping.
+Snowman Adventure never sleeps! ☃️🔥
+    """
+    await message.answer(text, reply_markup=get_main_keyboard())
+
+# --- PAYMENT HANDLERS (TELEGRAM STARS) ---
+
+@router.pre_checkout_query()
+async def on_pre_checkout(pre_checkout_query: types.PreCheckoutQuery):
+    await bot.answer_pre_checkout_query(pre_checkout_query.id, ok=True)
+
+@router.message(F.successful_payment)
+async def on_successful_payment(message: types.Message):
+    # পেমেন্ট সফল হলে এখানে ডাটাবেস আপডেট লজিক বসাতে পারেন (Firebase Admin SDK দিয়ে)
+    # অথবা ফ্রন্টএন্ড চেক করে নিবে।
+    await message.answer("❄️ Payment Successful! Your items have been added. Restart the game to see changes! ☃️")
+
+# --- WEB SERVER (API FOR FRONTEND) ---
+
+async def create_invoice_api(request):
     try:
-        ref = db.reference(f'bot_users/{chat_id}')
-        ref.set(True)
-    except Exception as e:
-        print(f"Error saving user: {e}")
+        data = await request.json()
+        item_id = data.get('item_id')
+        user_id = data.get('user_id') # Telegram User ID needed
 
-def get_all_users():
-    try:
-        ref = db.reference('bot_users')
-        users = ref.get()
-        if users:
-            return list(users.keys())
-        return []
-    except Exception as e:
-        print(f"Error fetching users: {e}")
-        return []
+        if item_id not in SHOP_ITEMS:
+            return web.json_response({"error": "Item not found"}, status=404)
 
-def send_telegram_message(chat_id, text, reply_markup=None):
-    payload = { "chat_id": chat_id, "text": text }
-    if reply_markup: payload["reply_markup"] = reply_markup
-    try: requests.post(f"{BASE_URL}/sendMessage", json=payload)
-    except Exception as e: print(f"Telegram API Error: {e}")
-
-def update_user_perks(user_id, item_id):
-    item = SHOP_ITEMS.get(item_id)
-    if not item: return False
-    
-    ref = db.reference(f'users/{user_id}')
-    data = ref.get() or {}
-    now_ms = int(time.time() * 1000)
-
-    if item['type'] == 'coin':
-        new_balance = data.get('balance', 0) + item['reward']
-        ref.update({'balance': new_balance})
-    
-    elif item['type'] in ['booster', 'autotap']:
-        field = f"{item['type']}EndTime"
-        current_end = data.get(field, 0)
-        start_point = max(now_ms, current_end)
-        duration_ms = item['duration'] * 24 * 60 * 60 * 1000
-        new_end = start_point + duration_ms
-        ref.update({field: new_end})
-    
-    return True
-
-# --- নতুন রাউট: AUTH (লগিন এবং ডেটা লোড) ---
-@app.route('/auth', methods=['POST'])
-def auth_user():
-    req_data = request.json
-    user_id = str(req_data.get('user_id'))
-    
-    # টেলিগ্রাম ভ্যালিডেশন (Simple Version)
-    # প্রোডাকশনের জন্য initData ভ্যালিডেশন করা উচিত
-    
-    if not user_id:
-        return jsonify({"error": "User ID missing"}), 400
-
-    ref = db.reference(f'users/{user_id}')
-    user_data = ref.get()
-
-    if not user_data:
-        # নতুন ইউজার ডিফল্ট ডেটা
-        user_data = {
-            "balance": 500,
-            "tonBalance": 0.0,
-            "level": 1,
-            "referralCount": 0,
-            "tapCount": 0,
-            "lastActive": int(time.time() * 1000)
-        }
-        ref.set(user_data)
-    else:
-        # বিদ্যমান ইউজারের লাস্ট এক্টিভ আপডেট
-        ref.update({"lastActive": int(time.time() * 1000)})
-
-    return jsonify(user_data)
-
-# --- নতুন রাউট: SYNC TAPS (ট্যাপ সেভ করা) ---
-@app.route('/sync_taps', methods=['POST'])
-def sync_taps():
-    try:
-        req_data = request.json
-        user_id = str(req_data.get('user_id'))
-        taps = int(req_data.get('taps', 0))
-
-        if not user_id or taps <= 0:
-            return jsonify({"status": "error", "reason": "Invalid data"}), 400
-
-        ref = db.reference(f'users/{user_id}')
-        user_data = ref.get()
+        item = SHOP_ITEMS[item_id]
         
-        if not user_data:
-            return jsonify({"status": "error", "reason": "User not found"}), 404
-
-        # ব্যালেন্স আপডেট লজিক
-        # এখানে সার্ভার সাইড লেভেল চেক করে গুণ করা যেতে পারে নিরাপত্তার জন্য
-        level = user_data.get('level', 1)
-        # সিম্পল লজিক: ধরে নিচ্ছি ফ্রন্টএন্ড থেকে শুধু ট্যাপ সংখ্যা আসছে
-        # আপনি চাইলে এখানে tapMultiplier লজিকও যোগ করতে পারেন
-        earned_coins = taps * level 
+        # Telegram Stars Invoice Link
+        # Currency must be XTR for Stars
+        prices = [LabeledPrice(label=item_id, amount=item['price'])] # Amount is 1 = 1 Star
         
-        new_balance = user_data.get('balance', 0) + earned_coins
-        new_tap_count = user_data.get('tapCount', 0) + taps
-
-        ref.update({
-            'balance': new_balance,
-            'tapCount': new_tap_count
-        })
-
-        return jsonify({"status": "ok", "balance": new_balance})
-
+        link = await bot.create_invoice_link(
+            title="Snowman Shop",
+            description=f"Purchase {item_id}",
+            payload=f"{user_id}_{item_id}",
+            provider_token="", # Stars এর জন্য ফাঁকা থাকে
+            currency="XTR",
+            prices=prices,
+        )
+        
+        return web.json_response({"result": link})
     except Exception as e:
-        print(f"Sync Error: {e}")
-        return jsonify({"status": "error", "reason": str(e)}), 500
+        logging.error(f"Error creating invoice: {e}")
+        return web.json_response({"error": str(e)}, status=500)
 
-
-@app.route('/create_invoice', methods=['POST'])
-def create_invoice():
-    req_data = request.json
-    user_id = req_data.get('user_id')
-    item_id = req_data.get('item_id')
+async def trigger_broadcast(request):
+    """
+    এই এন্ডপয়েন্টটি প্রতিদিন একবার কল করতে হবে (Cron Job ব্যবহার করে)।
+    """
+    # নোট: এখানে সব ইউজারের লুপ চালানো উচিত। কিন্তু সিম্পলিসিটির জন্য
+    # আপনি আপনার ডাটাবেস থেকে সব ইউজার আইডি নিয়ে লুপ করবেন।
+    # এখানে ডেমো হিসেবে আমরা কোড স্ট্রাকচার দিচ্ছি।
     
-    print(f"🔹 Invoice Request: User={user_id}, Item={item_id}")
+    # demo: request এ 'chat_id' পাঠালে টেস্ট করা যাবে
+    params = request.rel_url.query
+    chat_id = params.get('chat_id') # Testing purpose
+    
+    caption = """
+❄️🚨 HEY! Your Daily Rewards Are MELTING AWAY! 🚨❄️
 
-    if not user_id or not item_id:
-        return jsonify({"ok": False, "error": "Missing data"}), 400
+Snowman is waving at you right now ☃️👋
+Today = FREE rewards, but only if you show up! 😱🎁
 
-    item = SHOP_ITEMS.get(item_id)
-    if not item: 
-        return jsonify({"ok": False, "error": "Item not found"}), 400
+🔥 Don’t skip this 👇
+➡️ 🎡 Daily Spin is ACTIVE — one spin can change your day!
+➡️ 🎯 Daily Tasks are OPEN — quick actions, instant coins 💰
+➡️ ⏳ Miss today = lose today’s rewards forever
 
-    payload = {
-        "title": f"Buy {item_id.replace('_', ' ').title()}",
-        "description": "Boost your Snowman Adventure!",
-        "payload": f"{item_id}_{user_id}",
-        "provider_token": "", 
-        "currency": "XTR", 
-        "prices": [{"label": "Price", "amount": int(item['stars'])}] 
-    }
+Just 30 seconds can mean:
+💰 More coins
+🚀 Faster levels
+🏆 Higher rank
+
+The snow is falling… the prizes are waiting…
+👉 Open Snowman Adventure NOW and claim today’s wins! 🎮❄️
+
+Tap smart. Spin daily. Stay ahead. ☃️💫
+    """
+    
+    photo_file_id = "AgACAgUAAxkBAAE_9f1pVL83a2yTeglyOW1P3rQRmcT0iwACpwtrGxjJmVYBpQKTP5TwDQEAAwIAA3kAAzgE"
     
     try:
-        r = requests.post(f"{BASE_URL}/createInvoiceLink", json=payload)
-        resp_data = r.json()
-        return jsonify(resp_data)
-    except Exception as e:
-        return jsonify({"ok": False, "error": str(e)}), 500
-
-@app.route('/spin_wheel', methods=['POST'])
-def spin_wheel():
-    req_data = request.json
-    user_id = req_data.get('user_id')
-    
-    if not user_id:
-        return jsonify({"result": False, "error": "User ID required"}), 400
-    
-    ref = db.reference(f'users/{user_id}')
-    user_data = ref.get() or {}
-    
-    # --- Cooldown Logic (24 Hours) ---
-    last_spin = user_data.get('lastSpinTime', 0)
-    current_time = int(time.time() * 1000)
-    cooldown_ms = 24 * 60 * 60 * 1000 # 24 Hours
-    
-    if (current_time - last_spin) < cooldown_ms:
-        remaining_sec = (cooldown_ms - (current_time - last_spin)) / 1000
-        hours = int(remaining_sec // 3600)
-        minutes = int((remaining_sec % 3600) // 60)
-        return jsonify({
-            "result": False, 
-            "error": f"Wait {hours}h {minutes}m for next spin!"
-        })
-
-    # Spin Logic
-    chosen_index = random.choices(range(8), weights=SPIN_WEIGHTS, k=1)[0]
-    prize_amount = SPIN_PRIZES[chosen_index]
-    
-    current_ton = float(user_data.get('tonBalance', 0.0))
-    new_ton = current_ton + prize_amount
-    
-    ref.update({
-        'tonBalance': new_ton,
-        'lastSpinTime': current_time
-    })
-    
-    # [FIX] ভেরিয়েবল নাম new_ton_balance করা হয়েছে ফ্রন্টএন্ডের সাথে মিল রাখতে
-    return jsonify({
-        "result": True,
-        "index": chosen_index,
-        "prize": prize_amount,
-        "new_ton_balance": new_ton 
-    })
-
-@app.route('/webhook', methods=['POST'])
-def telegram_webhook():
-    update = request.json
-    
-    if 'pre_checkout_query' in update:
-        query_id = update['pre_checkout_query']['id']
-        requests.post(f"{BASE_URL}/answerPreCheckoutQuery", json={
-            "pre_checkout_query_id": query_id, 
-            "ok": True
-        })
-        return "OK", 200
-
-    if 'message' in update:
-        msg = update['message']
-        chat_id = msg['chat']['id']
-        text = msg.get('text', '')
-        user_id = msg.get('from', {}).get('id')
-        save_bot_user(chat_id)
-
-        if 'successful_payment' in msg:
-            payload = msg['successful_payment']['invoice_payload']
-            try:
-                item_id, uid = payload.split('_', 1)
-                if update_user_perks(uid, item_id):
-                    send_telegram_message(chat_id, f"✅ Payment Successful! Your {item_id} rewards have been added.")
-            except Exception as e:
-                print(f"Payment logic error: {e}")
-            return "OK", 200
-
-        if text.startswith('/broadcast') and str(user_id) == str(ADMIN_ID):
-            broadcast_msg = text.replace('/broadcast', '').strip()
-            if broadcast_msg:
-                users = get_all_users()
-                for uid in users:
-                    try:
-                        requests.post(f"{BASE_URL}/sendMessage", json={"chat_id": uid, "text": broadcast_msg})
-                        time.sleep(0.05)
-                    except: continue
-                send_telegram_message(chat_id, "✅ Broadcast sent.")
-            return "OK", 200
-
-        keyboard = {
-            "inline_keyboard": [
-                [{"text": "🚀 Play Game ❄️", "web_app": {"url": GAME_URL}}],
-                [{"text": "Join Community 📢", "url": CHANNEL_URL}],
-                [{"text": "Join Discussion 💬", "url": GROUP_URL}]
-            ]
-        }
-
-        if text == '/start':
-            welcome_text = "Welcome to Snowman Adventure! ☃️\nTap Play to start earning!"
-            send_telegram_message(chat_id, welcome_text, keyboard)
+        if chat_id:
+            await bot.send_photo(chat_id=chat_id, photo=photo_file_id, caption=caption, reply_markup=get_main_keyboard())
+            return web.Response(text=f"Broadcast sent to {chat_id}")
         else:
-            send_telegram_message(chat_id, "Tap Play to open the app! 👇", keyboard)
+            return web.Response(text="No chat_id provided for test. In production, loop through DB users.")
+    except Exception as e:
+        return web.Response(text=f"Failed: {str(e)}")
 
-    return "OK", 200
+async def home(request):
+    return web.Response(text="Snowman Adventure Backend is Running! ☃️")
 
-if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000)
+# --- APP RUNNER ---
+
+async def main():
+    # Web App Setup
+    app = web.Application()
+    app.router.add_post('/create_invoice', create_invoice_api)
+    app.router.add_get('/broadcast', trigger_broadcast) # Cron Job hits this
+    app.router.add_get('/', home)
+
+    # Setup Webhook or Polling (Using Polling for simplicity on Render worker, 
+    # but strictly Webhook is better. Here we run Bot + Web Server same loop)
+    
+    # Run Bot in background
+    asyncio.create_task(dp.start_polling(bot))
+    
+    # Run Web Server
+    runner = web.AppRunner(app)
+    await runner.setup()
+    port = int(os.getenv("PORT", 8080))
+    site = web.TCPSite(runner, '0.0.0.0', port)
+    await site.start()
+    
+    # Keep alive
+    await asyncio.Event().wait()
+
+if __name__ == "__main__":
+    asyncio.run(main())
