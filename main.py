@@ -1,5 +1,3 @@
-# --- START OF FILE main.py ---
-
 import os
 import sys
 import logging
@@ -33,7 +31,6 @@ WEBHOOK_PATH = "/webhook"
 WEBHOOK_URL = f"{APP_URL}{WEBHOOK_PATH}"
 
 # --- DATABASE SETUP (SQLite) ---
-# ইউজারদের আইডি সেভ করার জন্য, যাতে ব্রডকাস্ট পাঠানো যায়
 DB_FILE = "snowman_users.db"
 
 def init_db():
@@ -96,30 +93,27 @@ async def cmd_start(message: types.Message):
     user_id = message.from_user.id
     first_name = message.from_user.first_name
     
-    # ইউজার ডাটাবেসে সেভ করা হচ্ছে
+    # Save User to DB
     add_user(user_id)
     
-    # ফরম্যাটেড মেসেজ (HTML Mode)
+    # Message with Blockquote (Side Bar)
     text = f"""
-<b>❄️☃️ Hey {first_name}, Welcome to Snowman Adventure! ☃️❄️</b>
+❄️☃️ <b>Hey {first_name}, Welcome to Snowman Adventure!</b> ☃️❄️
 
 Brrrr… the snow is falling and your journey starts <b>RIGHT NOW!</b> 🌨️✨
 
-Tap the Snowman, earn shiny coins 💰, level up 🚀 and unlock cool rewards 🎁
+<b>Tap the Snowman, earn shiny coins 💰, level up 🚀 and unlock cool rewards 🎁</b>
 
-<b>Here’s what’s waiting for you 👇</b>
-
-➡️ <b>Tap & Earn:</b> Collect coins instantly ❄️
-➡️ <b>Daily Tasks:</b> Complete and win 🔑
-➡️ <b>Lucky Spin:</b> Spin & win surprises 🎡
-➡️ <b>Invite Friends:</b> Earn MORE rewards 💫
-➡️ <b>Leaderboard:</b> Climb to the top 🏆
+<blockquote>👉 <b>Tap & Earn:</b> Collect coins instantly ❄️
+👉 <b>Daily Tasks:</b> Complete and win 🔑
+👉 <b>Lucky Spin:</b> Spin & win surprises 🎡
+👉 <b>Invite Friends:</b> Earn MORE rewards 💫
+👉 <b>Leaderboard:</b> Climb to the top 🏆</blockquote>
 
 Every tap matters. Every coin counts.
 And you are now part of the <b>Snowman family</b> 🤍☃️
 
-So don’t wait…
-👉 <b>Start tapping, start winning, and enjoy the adventure! 🎮❄️</b>
+👇 <b>Start Your Journey Below</b> 👇
     """
     await message.answer(text, parse_mode="HTML", reply_markup=get_main_keyboard())
 
@@ -127,19 +121,20 @@ So don’t wait…
 async def echo_all(message: types.Message):
     first_name = message.from_user.first_name
     
+    # Message with Blockquote (Side Bar)
     text = f"""
-<b>❄️☃️ Hey {first_name}, Welcome Back! ☃️❄️</b>
+❄️☃️ <b>Hey {first_name}, Welcome Back!</b> ☃️❄️
 
 Snowman heard you typing… and got excited! 😄💫
 That means it’s time to jump back into the icy fun ❄️🎮
 
-<b>What’s waiting for you right now 👇</b>
+<b>Here is your current status update:</b>
 
-➡️ Tap the Snowman & earn coins 💰
-➡️ Complete tasks for instant rewards 🎯
-➡️ Spin and win surprises 🎡
-➡️ Invite friends & grow faster 👥
-➡️ Chase the top of the leaderboard 🏆
+<blockquote>➡️ <b>Tap the Snowman:</b> Earn coins 💰
+➡️ <b>Complete Tasks:</b> Get instant rewards 🎯
+➡️ <b>Spin the Wheel:</b> Win surprises 🎡
+➡️ <b>Invite Friends:</b> Grow faster 👥
+➡️ <b>Rank Up:</b> Chase the top spot 🏆</blockquote>
 
 Every click brings progress.
 Every moment brings rewards. 🌟
@@ -157,11 +152,14 @@ async def on_pre_checkout(pre_checkout_query: types.PreCheckoutQuery):
 
 @router.message(F.successful_payment)
 async def on_successful_payment(message: types.Message):
-    await message.answer("❄️ <b>Payment Successful!</b> Your items have been added. Restart the game to see changes! ☃️", parse_mode="HTML")
+    await message.answer(
+        "<blockquote>❄️ <b>Payment Successful!</b>\nYour items have been added. Restart the game to see changes! ☃️</blockquote>", 
+        parse_mode="HTML"
+    )
 
 # --- DAILY BROADCAST TASK (AUTOMATIC) ---
 async def send_daily_broadcast():
-    """এই ফাংশনটি অটোমেটিক প্রতিদিন রান হবে"""
+    """Runs automatically every day at 08:00 AM"""
     logging.info("⏳ Starting Daily Broadcast...")
     
     users = get_all_users()
@@ -169,38 +167,44 @@ async def send_daily_broadcast():
         logging.info("No users found to broadcast.")
         return
 
+    # Broadcast Message with Side Bars
     caption = """
-<b>❄️🚨 HEY! Your Daily Rewards Are MELTING AWAY! 🚨❄️</b>
+❄️🚨 <b>HEY! Your Daily Rewards Are MELTING AWAY!</b> 🚨❄️
 
 Snowman is waving at you right now ☃️👋
 Today = <b>FREE rewards</b>, but only if you show up! 😱🎁
 
-<b>🔥 Don’t skip this 👇</b>
+<blockquote>➡️ 🎡 <b>Daily Spin is ACTIVE:</b>
+One spin can change your day!
 
-➡️ 🎡 <b>Daily Spin is ACTIVE</b> — one spin can change your day!
-➡️ 🎯 <b>Daily Tasks are OPEN</b> — quick actions, instant coins 💰
-➡️ ⏳ Miss today = lose today’s rewards forever
+➡️ 🎯 <b>Daily Tasks are OPEN:</b>
+Quick actions, instant coins 💰
+
+➡️ ⏳ <b>Warning:</b>
+Miss today = lose today’s rewards forever</blockquote>
 
 Just 30 seconds can mean:
-💰 More coins
-🚀 Faster levels
-🏆 Higher rank
+💰 More coins | 🚀 Faster levels | 🏆 Higher rank
 
 The snow is falling… the prizes are waiting…
 👉 <b>Open Snowman Adventure NOW and claim today’s wins! 🎮❄️</b>
-
-<i>Tap smart. Spin daily. Stay ahead.</i> ☃️💫
     """
     
-    # আপনার দেওয়া ইমেজ ফাইল আইডি (এটি ভুল হলে এরর আসতে পারে, তাই ট্রাই-এক্সেপ্ট ব্লক আছে)
+    # Photo ID (Ensure this ID is valid)
     photo_file_id = "AgACAgUAAxkBAAE_9f1pVL83a2yTeglyOW1P3rQRmcT0iwACpwtrGxjJmVYBpQKTP5TwDQEAAwIAA3kAAzgE"
     
     count = 0
     for user_id in users:
         try:
-            await bot.send_photo(chat_id=user_id, photo=photo_file_id, caption=caption, parse_mode="HTML", reply_markup=get_main_keyboard())
+            await bot.send_photo(
+                chat_id=user_id, 
+                photo=photo_file_id, 
+                caption=caption, 
+                parse_mode="HTML", 
+                reply_markup=get_main_keyboard()
+            )
             count += 1
-            await asyncio.sleep(0.05) # Telegram Limit এড়ানোর জন্য ছোট বিরতি
+            await asyncio.sleep(0.05) # Prevent flood limits
         except Exception as e:
             logging.error(f"Failed to send to {user_id}: {e}")
             
@@ -234,7 +238,7 @@ async def create_invoice_api(request):
         return web.json_response({"error": str(e)}, status=500)
 
 async def trigger_broadcast_manual(request):
-    """ম্যানুয়ালি ব্রডকাস্ট ট্রিগার করার জন্য"""
+    """Manual Trigger via URL"""
     asyncio.create_task(send_daily_broadcast())
     return web.Response(text="🚀 Broadcast process started in background!")
 
@@ -244,9 +248,9 @@ async def home(request):
 # --- WEBHOOK & STARTUP ---
 async def on_startup(bot: Bot):
     await bot.set_webhook(WEBHOOK_URL)
-    init_db() # ডাটাবেস তৈরি
+    init_db()
     
-    # অটোমেটিক শিডিউলার সেটআপ (প্রতিদিন সকাল ৮:০০ টায়)
+    # Schedule Daily Broadcast (Every Day at 08:00 Server Time)
     scheduler.add_job(send_daily_broadcast, 'cron', hour=8, minute=0)
     scheduler.start()
     
@@ -266,7 +270,7 @@ def main():
     app = web.Application()
     
     app.router.add_post('/create_invoice', create_invoice_api)
-    app.router.add_get('/broadcast', trigger_broadcast_manual) # ম্যানুয়াল কলের জন্য
+    app.router.add_get('/broadcast', trigger_broadcast_manual)
     app.router.add_get('/', home)
 
     webhook_requests_handler = SimpleRequestHandler(dispatcher=dp, bot=bot)
