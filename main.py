@@ -16,7 +16,7 @@ logging.basicConfig(
 
 # --- ENVIRONMENT CHECK ---
 # Render থেকে ভেরিয়েবলগুলো ঠিকমতো লোড হচ্ছে কিনা চেক করা
-BOT_TOKEN = os.getenv("BOT_TOKEN")
+BOT_TOKEN = os.getenv("8336857025:AAHU9LtgSGy5oifVfMk2Le92vkpk94pq6k8")
 if not BOT_TOKEN:
     logging.error("CRITICAL ERROR: 'BOT_TOKEN' is missing in Environment Variables!")
     sys.exit(1) # কোড বন্ধ করে দিবে যাতে আপনি লগে এরর দেখেন
