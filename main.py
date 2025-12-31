@@ -2,424 +2,378 @@ import os
 import sys
 import logging
 import asyncio
-import sqlite3
-import html
-from datetime import datetime
-
-# --- AIOGRAM IMPORTS ---
+from aiohttp import web
 from aiogram import Bot, Dispatcher, Router, F, types
 from aiogram.filters import Command, StateFilter
-from aiogram.types import (
-    InlineKeyboardMarkup, InlineKeyboardButton, LabeledPrice, 
-    CallbackQuery, Message, FSInputFile
-)
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, LabeledPrice, CallbackQuery
+from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
-from aiogram.exceptions import TelegramForbiddenError, TelegramRetryAfter
-
-# --- OTHER IMPORTS ---
-from aiohttp import web
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 # --- LOGGING SETUP ---
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(levelname)s - %(message)s",
-    stream=sys.stdout
-)
+logging.basicConfig(level=logging.INFO, stream=sys.stdout)
 
-# --- CONFIGURATION ---
+# --- CONFIGURATION (ENV VARS) ---
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 APP_URL = os.getenv("APP_URL")
-ADMIN_ID = 7605281774  # আপনার নির্দিষ্ট অ্যাডমিন আইডি
 
+# --- ADMIN CONFIGURATION ---
+ADMIN_ID = 7605281774  # আপনার অ্যাডমিন আইডি
+
+# ভেরিয়েবল চেক
 if not BOT_TOKEN:
-    logging.error("❌ CRITICAL: BOT_TOKEN is missing!")
+    logging.error("❌ CRITICAL ERROR: BOT_TOKEN is missing!")
     sys.exit(1)
-
 if not APP_URL:
-    logging.error("❌ CRITICAL: APP_URL is missing!")
+    logging.error("❌ CRITICAL ERROR: APP_URL is missing!")
     sys.exit(1)
 
 WEBHOOK_PATH = "/webhook"
 WEBHOOK_URL = f"{APP_URL}{WEBHOOK_PATH}"
 
-# --- DATABASE SETUP ---
-DB_FILE = "snowman_users.db"
+# --- DATABASE (SIMPLE MEMORY SET) ---
+# নোট: সার্ভার রিস্টার্ট দিলে এই ডাটা মুছে যাবে। পার্মানেন্ট করার জন্য SQL Database প্রয়োজন।
+users_db = set()
 
-def init_db():
-    try:
-        conn = sqlite3.connect(DB_FILE)
-        cursor = conn.cursor()
-        cursor.execute('''CREATE TABLE IF NOT EXISTS users (user_id INTEGER PRIMARY KEY)''')
-        conn.commit()
-        conn.close()
-        logging.info("✅ Database initialized successfully.")
-    except Exception as e:
-        logging.error(f"❌ Database Init Error: {e}")
-
-def add_user(user_id):
-    try:
-        conn = sqlite3.connect(DB_FILE)
-        cursor = conn.cursor()
-        cursor.execute("INSERT OR IGNORE INTO users (user_id) VALUES (?)", (user_id,))
-        conn.commit()
-        conn.close()
-    except Exception as e:
-        logging.error(f"⚠️ Failed to add user to DB: {e}")
-
-def get_all_users():
-    try:
-        conn = sqlite3.connect(DB_FILE)
-        cursor = conn.cursor()
-        cursor.execute("SELECT user_id FROM users")
-        users = [row[0] for row in cursor.fetchall()]
-        conn.close()
-        return users
-    except Exception as e:
-        logging.error(f"⚠️ Failed to fetch users: {e}")
-        return []
-
-# --- SHOP ITEMS ---
+# --- SHOP CONFIGURATION ---
 SHOP_ITEMS = {
     'coin_starter': {'price': 10, 'amount': 100},
     'coin_small': {'price': 50, 'amount': 1},
     'coin_medium': {'price': 100, 'amount': 1},
     'coin_large': {'price': 250, 'amount': 1},
     'coin_mega': {'price': 500, 'amount': 1},
+    'booster_3d': {'price': 20, 'amount': 1},
+    'booster_15d': {'price': 70, 'amount': 1},
+    'booster_30d': {'price': 120, 'amount': 1},
+    'autotap_1d': {'price': 20, 'amount': 1},
+    'autotap_7d': {'price': 80, 'amount': 1},
+    'autotap_30d': {'price': 200, 'amount': 1},
 }
 
 # --- FSM STATES FOR BROADCAST ---
 class BroadcastState(StatesGroup):
     menu = State()
-    waiting_media = State()
-    waiting_text = State()
-    waiting_buttons = State()
-    confirm_send = State()
+    waiting_for_media = State()
+    waiting_for_text = State()
+    waiting_for_buttons = State()
 
-# --- BOT INIT ---
+# --- BOT INITIALIZATION ---
 bot = Bot(token=BOT_TOKEN)
 storage = MemoryStorage()
 dp = Dispatcher(storage=storage)
 router = Router()
 dp.include_router(router)
-scheduler = AsyncIOScheduler()
 
 # --- KEYBOARDS ---
 def get_main_keyboard():
     kb = [
-        [InlineKeyboardButton(text="❄️ Start App ☃️", url="https://t.me/snowmanadventurebot?startapp")],
+        [InlineKeyboardButton(text="❄️ Start App ☃️", url="https://t.me/snowmanadventurebot?startapp=8244641590")],
         [
-            InlineKeyboardButton(text="❄️ Join Channel 🎯", url="https://t.me/snowmanadventurecommunity"),
-            InlineKeyboardButton(text="❄️ Discussion Group 🥶", url="https://t.me/snowmanadventurediscuss")
+            InlineKeyboardButton(text="❄️ Channel 🎯", url="https://t.me/snowmanadventureannouncement"),
+            InlineKeyboardButton(text="❄️ Group 🥶", url="https://t.me/snowmanadventuregroup")
         ]
     ]
     return InlineKeyboardMarkup(inline_keyboard=kb)
 
-def get_broadcast_panel_kb():
-    """আপনার স্ক্রিনশটের মত প্যানেল"""
+def get_broadcast_menu(data):
+    """ব্রডকাস্ট কন্ট্রোল প্যানেল তৈরি করে"""
+    has_media = "✅ Set" if data.get('media_id') else "❌ Empty"
+    has_text = "✅ Set" if data.get('text') else "❌ Empty"
+    has_btn = "✅ Set" if data.get('buttons') else "❌ Empty"
+
     kb = [
         [
-            InlineKeyboardButton(text="🖼 Media", callback_data="bd_set_media"),
-            InlineKeyboardButton(text="👀 See", callback_data="bd_see_media")
+            InlineKeyboardButton(text=f"🖼️ Media", callback_data="br_media"),
+            InlineKeyboardButton(text=f"👀 {has_media}", callback_data="br_dummy_media")
         ],
         [
-            InlineKeyboardButton(text="abc Text", callback_data="bd_set_text"),
-            InlineKeyboardButton(text="👀 See", callback_data="bd_see_text")
+            InlineKeyboardButton(text=f"📝 Text", callback_data="br_text"),
+            InlineKeyboardButton(text=f"👀 {has_text}", callback_data="br_dummy_text")
         ],
         [
-            InlineKeyboardButton(text="⌨ Buttons", callback_data="bd_set_buttons"),
-            InlineKeyboardButton(text="👀 See", callback_data="bd_see_buttons")
+            InlineKeyboardButton(text=f"🔘 Buttons", callback_data="br_buttons"),
+            InlineKeyboardButton(text=f"👀 {has_btn}", callback_data="br_dummy_btn")
         ],
+        [InlineKeyboardButton(text="👀 Full Preview", callback_data="br_preview")],
         [
-            InlineKeyboardButton(text="👀 Full preview", callback_data="bd_full_preview")
-        ],
-        [
-            InlineKeyboardButton(text="🔙 Back", callback_data="bd_cancel"),
-            InlineKeyboardButton(text="Next ➡️", callback_data="bd_start_send")
+            InlineKeyboardButton(text="🔙 Back", callback_data="br_cancel"),
+            InlineKeyboardButton(text="Next ➡️", callback_data="br_send")
         ]
     ]
     return InlineKeyboardMarkup(inline_keyboard=kb)
 
-def get_back_kb():
-    return InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🔙 Back to Menu", callback_data="bd_back_menu")]])
+def parse_buttons(button_text):
+    """টেক্সট থেকে ইনলাইন বাটন তৈরি করে (Format: Text-URL)"""
+    if not button_text:
+        return None
+    try:
+        kb = []
+        # কমা বা নতুন লাইন দিয়ে একাধিক বাটন হ্যান্ডেল করা যাবে
+        lines = button_text.split('\n')
+        for line in lines:
+            parts = line.split('-')
+            if len(parts) >= 2:
+                text = parts[0].strip()
+                url = parts[1].strip()
+                # ইউজারনেম থাকলে লিংক ঠিক করা
+                if url.startswith('@'):
+                    url = f"https://t.me/{url[1:]}"
+                elif not url.startswith('http'):
+                    url = f"https://{url}"
+                kb.append([InlineKeyboardButton(text=text, url=url)])
+        return InlineKeyboardMarkup(inline_keyboard=kb)
+    except:
+        return None
 
-# --- USER HANDLERS ---
+# --- BASIC HANDLERS ---
 
 @router.message(Command("start"))
 async def cmd_start(message: types.Message):
-    user_id = message.from_user.id
-    first_name = html.escape(message.from_user.first_name)
-    add_user(user_id)
+    # ইউজার ডাটাবেসে সেভ করা (মেমোরি)
+    users_db.add(message.from_user.id)
     
-    text = f"❄️☃️ <b>Hey {first_name}, Welcome to Snowman Adventure!</b> ☃️❄️\n\nTap the Snowman, earn coins & enjoy! 🌨️"
-    await message.answer(text, parse_mode="HTML", reply_markup=get_main_keyboard())
+    first_name = message.from_user.first_name
+    text = f"""
+❄️☃️ Hey {first_name}, Welcome to Snowman Adventure! ☃️❄️
+Brrrr… the snow is falling and your journey starts RIGHT NOW! 🌨️✨
+Tap the Snowman, earn shiny coins 💰, level up 🚀 and unlock cool rewards 🎁
 
-# --- BROADCAST SYSTEM HANDLERS (ADMIN ONLY) ---
+Here’s what’s waiting for you 👇
+➡️ Tap & earn coins ❄️
+➡️ Complete daily tasks 🔑
+➡️ Spin & win surprises 🎡
+➡️ Invite friends and earn MORE 💫
+➡️ Climb the leaderboard 🏆
+
+Every tap matters. Every coin counts.
+And you are now part of the Snowman family 🤍☃️
+So don’t wait…
+👉 Start tapping, start winning, and enjoy the adventure! 🎮❄️
+    """
+    await message.answer(text, reply_markup=get_main_keyboard())
+
+@router.message(F.text & ~F.text.startswith("/"))
+async def echo_all(message: types.Message, state: FSMContext):
+    # যদি ব্রডকাস্ট মোডে থাকে তবে এই হ্যান্ডলার কাজ করবে না
+    current_state = await state.get_state()
+    if current_state:
+        return
+
+    users_db.add(message.from_user.id)
+    first_name = message.from_user.first_name
+    text = f"""
+❄️☃️ Hey {first_name}, Welcome Back to Snowman Adventure! ☃️❄️
+Snowman heard you typing… and got excited! 😄💫
+Click below to start playing!
+    """
+    await message.answer(text, reply_markup=get_main_keyboard())
+
+# --- BROADCAST SYSTEM HANDLERS ---
 
 @router.message(Command("broadcast"))
 async def cmd_broadcast(message: types.Message, state: FSMContext):
     if message.from_user.id != ADMIN_ID:
-        return 
+        return # সাইলেন্ট রিজেক্ট
     
-    # Reset state and init default data
+    # স্টেট ক্লিয়ার এবং ডিফল্ট ডাটা সেট
     await state.clear()
-    await state.update_data(media_id=None, media_type=None, text=None, buttons=[])
+    await state.update_data(media_id=None, text=None, buttons=None)
     
-    await message.answer(
-        "<b>📢 Broadcast Panel</b>\n\nSelect an option to configure your post:",
-        reply_markup=get_broadcast_panel_kb(),
-        parse_mode="HTML"
-    )
+    text = "📢 **Broadcast Menu**\n\nConfigure your broadcast below using the buttons."
+    await message.answer(text, reply_markup=get_broadcast_menu({}), parse_mode="Markdown")
     await state.set_state(BroadcastState.menu)
 
-# -- Navigation Handlers --
+# -- Menu Callback Handlers --
 
-@router.callback_query(F.data == "bd_back_menu")
-async def back_to_menu(callback: CallbackQuery, state: FSMContext):
-    await state.set_state(BroadcastState.menu)
-    await callback.message.edit_text(
-        "<b>📢 Broadcast Panel</b>\n\nSelect an option to configure your post:",
-        reply_markup=get_broadcast_panel_kb(),
-        parse_mode="HTML"
-    )
+@router.callback_query(F.data == "br_media", StateFilter(BroadcastState.menu))
+async def cb_ask_media(call: CallbackQuery, state: FSMContext):
+    await call.message.edit_text("🖼️ **Send me the photo/image** you want to attach.\n(Send text to cancel)", parse_mode="Markdown")
+    await state.set_state(BroadcastState.waiting_for_media)
 
-@router.callback_query(F.data == "bd_cancel")
-async def cancel_broadcast(callback: CallbackQuery, state: FSMContext):
+@router.callback_query(F.data == "br_text", StateFilter(BroadcastState.menu))
+async def cb_ask_text(call: CallbackQuery, state: FSMContext):
+    await call.message.edit_text("📝 **Send me the caption/text** for the post.", parse_mode="Markdown")
+    await state.set_state(BroadcastState.waiting_for_text)
+
+@router.callback_query(F.data == "br_buttons", StateFilter(BroadcastState.menu))
+async def cb_ask_buttons(call: CallbackQuery, state: FSMContext):
+    msg = """
+🔘 **Send me the button in this format:**
+`Text-URL`
+
+Example:
+`BOOMB-@Moneys_Factory1Bot`
+or
+`Join Channel-https://t.me/example`
+
+(Send one line per button)
+    """
+    await call.message.edit_text(msg, parse_mode="Markdown")
+    await state.set_state(BroadcastState.waiting_for_buttons)
+
+@router.callback_query(F.data == "br_cancel", StateFilter(BroadcastState.menu))
+async def cb_cancel_broadcast(call: CallbackQuery, state: FSMContext):
     await state.clear()
-    await callback.message.edit_text("❌ Broadcast cancelled.")
+    await call.message.edit_text("❌ Broadcast setup cancelled.")
 
-# -- Media Handlers --
-
-@router.callback_query(F.data == "bd_set_media")
-async def ask_media(callback: CallbackQuery, state: FSMContext):
-    await state.set_state(BroadcastState.waiting_media)
-    await callback.message.edit_text(
-        "🖼 <b>Send me an Image or Video</b> for the broadcast.\nOr click Back to cancel.",
-        reply_markup=get_back_kb(),
-        parse_mode="HTML"
-    )
-
-@router.message(StateFilter(BroadcastState.waiting_media), F.photo | F.video)
-async def set_media(message: types.Message, state: FSMContext):
-    if message.photo:
-        file_id = message.photo[-1].file_id
-        m_type = "photo"
-    elif message.video:
-        file_id = message.video.file_id
-        m_type = "video"
-    else:
-        return await message.answer("⚠️ Only Photo or Video supported.")
-
-    await state.update_data(media_id=file_id, media_type=m_type)
-    await message.answer("✅ Media set!", reply_markup=get_back_kb())
-
-@router.callback_query(F.data == "bd_see_media")
-async def see_media(callback: CallbackQuery, state: FSMContext):
+@router.callback_query(F.data == "br_preview", StateFilter(BroadcastState.menu))
+async def cb_preview(call: CallbackQuery, state: FSMContext):
     data = await state.get_data()
-    if not data.get("media_id"):
-        return await callback.answer("❌ No media set yet!", show_alert=True)
-    
-    if data['media_type'] == 'photo':
-        await callback.message.answer_photo(data['media_id'], caption="🖼 Your Media")
-    else:
-        await callback.message.answer_video(data['media_id'], caption="📹 Your Media")
-
-# -- Text Handlers --
-
-@router.callback_query(F.data == "bd_set_text")
-async def ask_text(callback: CallbackQuery, state: FSMContext):
-    await state.set_state(BroadcastState.waiting_text)
-    await callback.message.edit_text(
-        "📝 <b>Send the Text/Caption</b> for the broadcast.\nYou can use HTML tags.",
-        reply_markup=get_back_kb(),
-        parse_mode="HTML"
-    )
-
-@router.message(StateFilter(BroadcastState.waiting_text), F.text)
-async def set_text_msg(message: types.Message, state: FSMContext):
-    await state.update_data(text=message.html_text) # html_text preserves formatting
-    await message.answer("✅ Text set!", reply_markup=get_back_kb())
-
-@router.callback_query(F.data == "bd_see_text")
-async def see_text(callback: CallbackQuery, state: FSMContext):
-    data = await state.get_data()
-    text = data.get("text", "❌ No text set yet.")
-    await callback.message.answer(f"📝 <b>Current Text:</b>\n\n{text}", parse_mode="HTML")
-
-# -- Button Handlers --
-
-@router.callback_query(F.data == "bd_set_buttons")
-async def ask_buttons(callback: CallbackQuery, state: FSMContext):
-    await state.set_state(BroadcastState.waiting_buttons)
-    text = (
-        "⌨ <b>Send Buttons in this format:</b>\n\n"
-        "<code>Button Name-URL</code>\n\n"
-        "Example:\n"
-        "<code>Join Channel-https://t.me/channel</code>\n"
-        "<code>My Bot-@MyBot</code>\n\n"
-        "Send multiple lines for multiple buttons."
-    )
-    await callback.message.edit_text(text, reply_markup=get_back_kb(), parse_mode="HTML")
-
-@router.message(StateFilter(BroadcastState.waiting_buttons), F.text)
-async def set_buttons_msg(message: types.Message, state: FSMContext):
-    raw_lines = message.text.split('\n')
-    buttons = []
-    
-    for line in raw_lines:
-        if '-' in line:
-            parts = line.split('-', 1)
-            name = parts[0].strip()
-            url = parts[1].strip()
-            # Fix t.me short links if needed
-            if url.startswith('@'):
-                url = f"https://t.me/{url[1:]}"
-            buttons.append({'text': name, 'url': url})
-    
-    if not buttons:
-        return await message.answer("⚠️ Format incorrect. Try: Name-Link")
-        
-    await state.update_data(buttons=buttons)
-    await message.answer(f"✅ {len(buttons)} Buttons set!", reply_markup=get_back_kb())
-
-@router.callback_query(F.data == "bd_see_buttons")
-async def see_buttons(callback: CallbackQuery, state: FSMContext):
-    data = await state.get_data()
-    buttons_data = data.get("buttons", [])
-    
-    if not buttons_data:
-        return await callback.answer("❌ No buttons set!", show_alert=True)
-
-    kb_rows = [[InlineKeyboardButton(text=b['text'], url=b['url'])] for b in buttons_data]
-    markup = InlineKeyboardMarkup(inline_keyboard=kb_rows)
-    
-    await callback.message.answer("⌨ <b>Buttons Preview:</b>", reply_markup=markup, parse_mode="HTML")
-
-# -- Preview & Send --
-
-@router.callback_query(F.data == "bd_full_preview")
-async def full_preview(callback: CallbackQuery, state: FSMContext):
-    data = await state.get_data()
-    media_id = data.get("media_id")
-    text = data.get("text", "")
-    buttons_data = data.get("buttons", [])
-    
-    kb_rows = [[InlineKeyboardButton(text=b['text'], url=b['url'])] for b in buttons_data]
-    markup = InlineKeyboardMarkup(inline_keyboard=kb_rows) if buttons_data else None
+    media_id = data.get('media_id')
+    text = data.get('text') or "No text set."
+    btn_markup = parse_buttons(data.get('buttons'))
 
     try:
         if media_id:
-            if data['media_type'] == 'photo':
-                await callback.message.answer_photo(media_id, caption=text, parse_mode="HTML", reply_markup=markup)
-            else:
-                await callback.message.answer_video(media_id, caption=text, parse_mode="HTML", reply_markup=markup)
-        elif text:
-            await callback.message.answer(text, parse_mode="HTML", reply_markup=markup)
+            await call.message.answer_photo(photo=media_id, caption=text, reply_markup=btn_markup)
         else:
-            await callback.answer("⚠️ Nothing to preview (No Media or Text)", show_alert=True)
+            await call.message.answer(text=text, reply_markup=btn_markup)
+        
+        # প্রিভিউ দেখানোর পর আবার মেনু শো করা
+        await call.message.answer("☝️ Here is the preview. Use the menu above to edit or send.", reply_markup=get_broadcast_menu(data))
     except Exception as e:
-        await callback.message.answer(f"⚠️ Preview Error: {e}")
+        await call.answer(f"Error in preview: {str(e)}", show_alert=True)
 
-@router.callback_query(F.data == "bd_start_send")
-async def start_broadcasting(callback: CallbackQuery, state: FSMContext):
+@router.callback_query(F.data == "br_send", StateFilter(BroadcastState.menu))
+async def cb_send_broadcast(call: CallbackQuery, state: FSMContext):
     data = await state.get_data()
+    media_id = data.get('media_id')
+    text = data.get('text')
+    buttons_raw = data.get('buttons')
     
-    if not data.get("text") and not data.get("media_id"):
-        return await callback.answer("⚠️ Content is empty! Set text or media.", show_alert=True)
-    
-    users = get_all_users()
-    total_users = len(users)
-    await callback.message.edit_text(f"🚀 <b>Starting Broadcast to {total_users} users...</b>", parse_mode="HTML")
-    
-    # Run in background
-    asyncio.create_task(run_broadcast(users, data, callback.from_user.id))
-    await state.clear()
+    if not text and not media_id:
+        await call.answer("❌ Nothing to send! Set Text or Media.", show_alert=True)
+        return
 
-async def run_broadcast(users, data, admin_id):
-    media_id = data.get("media_id")
-    media_type = data.get("media_type")
-    text = data.get("text", "")
-    buttons_data = data.get("buttons", [])
+    # কনফার্মেশন শুরু
+    await call.message.edit_text("⏳ Sending broadcast... Do not touch anything.")
     
-    kb_rows = [[InlineKeyboardButton(text=b['text'], url=b['url'])] for b in buttons_data]
-    markup = InlineKeyboardMarkup(inline_keyboard=kb_rows) if buttons_data else None
-    
-    sent = 0
+    markup = parse_buttons(buttons_raw)
+    count = 0
     blocked = 0
     
-    for user_id in users:
+    # ব্রডকাস্ট লুপ
+    for user_id in users_db:
         try:
             if media_id:
-                if media_type == 'photo':
-                    await bot.send_photo(chat_id=user_id, photo=media_id, caption=text, parse_mode="HTML", reply_markup=markup)
-                else:
-                    await bot.send_video(chat_id=user_id, video=media_id, caption=text, parse_mode="HTML", reply_markup=markup)
+                await bot.send_photo(chat_id=user_id, photo=media_id, caption=text, reply_markup=markup)
             else:
-                await bot.send_message(chat_id=user_id, text=text, parse_mode="HTML", reply_markup=markup)
-            
-            sent += 1
-            await asyncio.sleep(0.05) # Safe limit
-            
-        except TelegramForbiddenError:
-            blocked += 1
-        except TelegramRetryAfter as e:
-            await asyncio.sleep(e.retry_after)
+                await bot.send_message(chat_id=user_id, text=text, reply_markup=markup)
+            count += 1
+            await asyncio.sleep(0.05) # ফ্লাড লিমিট এড়াতে
         except Exception as e:
-            logging.error(f"Broadcast fail for {user_id}: {e}")
+            blocked += 1
     
-    await bot.send_message(admin_id, f"✅ <b>Broadcast Complete!</b>\n\nSent: {sent}\nBlocked: {blocked}\nTotal: {len(users)}", parse_mode="HTML")
+    await call.message.answer(f"✅ Broadcast Complete!\n\n👥 Sent to: {count}\n🚫 Blocked/Failed: {blocked}")
+    await state.clear()
 
-# --- PAYMENT ---
+# -- Input Listeners --
+
+@router.message(StateFilter(BroadcastState.waiting_for_media), F.photo)
+async def input_media(message: types.Message, state: FSMContext):
+    photo_id = message.photo[-1].file_id
+    await state.update_data(media_id=photo_id)
+    data = await state.get_data()
+    await message.answer("✅ Image Set!", reply_markup=get_broadcast_menu(data))
+    await state.set_state(BroadcastState.menu)
+
+@router.message(StateFilter(BroadcastState.waiting_for_text), F.text)
+async def input_text(message: types.Message, state: FSMContext):
+    await state.update_data(text=message.text)
+    data = await state.get_data()
+    await message.answer("✅ Text Set!", reply_markup=get_broadcast_menu(data))
+    await state.set_state(BroadcastState.menu)
+
+@router.message(StateFilter(BroadcastState.waiting_for_buttons), F.text)
+async def input_buttons(message: types.Message, state: FSMContext):
+    # ভ্যালিডেশন চেক
+    if parse_buttons(message.text) is None:
+        await message.answer("❌ Invalid format! Please use `Text-URL` format.\nTry again:")
+        return
+    
+    await state.update_data(buttons=message.text)
+    data = await state.get_data()
+    await message.answer("✅ Buttons Set!", reply_markup=get_broadcast_menu(data))
+    await state.set_state(BroadcastState.menu)
+
+
+# --- PAYMENT HANDLERS ---
 @router.pre_checkout_query()
 async def on_pre_checkout(pre_checkout_query: types.PreCheckoutQuery):
     await bot.answer_pre_checkout_query(pre_checkout_query.id, ok=True)
 
 @router.message(F.successful_payment)
 async def on_successful_payment(message: types.Message):
-    await message.answer("❄️ <b>Payment Successful!</b>", parse_mode="HTML")
+    await message.answer("❄️ Payment Successful! Your items have been added. Restart the game to see changes! ☃️")
 
-# --- SERVER ROUTES ---
+# --- WEBHOOK TRIGGERS ---
+async def on_startup(bot: Bot):
+    logging.info(f"🔗 Setting webhook to: {WEBHOOK_URL}")
+    await bot.set_webhook(WEBHOOK_URL)
+
+async def on_shutdown(bot: Bot):
+    logging.info("🔌 Deleting webhook...")
+    await bot.delete_webhook()
+
+# --- API ROUTES ---
+
 async def create_invoice_api(request):
     try:
         data = await request.json()
         item_id = data.get('item_id')
         user_id = data.get('user_id')
-        if item_id not in SHOP_ITEMS: return web.json_response({"error": "Item not found"}, status=404)
+
+        if item_id not in SHOP_ITEMS:
+            return web.json_response({"error": "Item not found"}, status=404)
+
         item = SHOP_ITEMS[item_id]
         prices = [LabeledPrice(label=item_id, amount=item['price'])]
-        link = await bot.create_invoice_link(title="Snowman Shop", description=item_id, payload=f"{user_id}_{item_id}", currency="XTR", prices=prices)
+        
+        link = await bot.create_invoice_link(
+            title="Snowman Shop",
+            description=f"Purchase {item_id}",
+            payload=f"{user_id}_{item_id}",
+            provider_token="", # Stars currency
+            currency="XTR",
+            prices=prices,
+        )
         return web.json_response({"result": link})
     except Exception as e:
+        logging.error(f"Invoice Error: {e}")
         return web.json_response({"error": str(e)}, status=500)
 
+async def trigger_broadcast_api(request):
+    # API দিয়ে ব্রডকাস্ট (Legacy support)
+    chat_id = request.rel_url.query.get('chat_id')
+    caption = "❄️🚨 Daily Rewards are waiting! Log in now! 🚨❄️"
+    photo_file_id = "AgACAgUAAxkBAAE_9f1pVL83a2yTeglyOW1P3rQRmcT0iwACpwtrGxjJmVYBpQKTP5TwDQEAAwIAA3kAAzgE"
+    
+    try:
+        if chat_id:
+            await bot.send_photo(chat_id=chat_id, photo=photo_file_id, caption=caption, reply_markup=get_main_keyboard())
+            return web.Response(text=f"Broadcast sent to {chat_id}")
+        else:
+            return web.Response(text="API Broadcast Active. Use /broadcast in bot for mass sending.")
+    except Exception as e:
+        return web.Response(text=f"Error: {str(e)}", status=500)
+
 async def home(request):
-    return web.Response(text="⛄ Snowman Bot is Running! ❄️")
+    return web.Response(text="⛄ Snowman Adventure Backend is Running Successfully! ❄️")
 
-# --- LIFECYCLE ---
-async def on_startup(bot: Bot):
-    await bot.set_webhook(WEBHOOK_URL)
-    init_db()
-    logging.info(f"✅ Webhook set: {WEBHOOK_URL}")
-
-async def on_shutdown(bot: Bot):
-    await bot.delete_webhook()
-    scheduler.shutdown()
-    logging.info("🛑 Bot Stopped")
-
-# --- MAIN ---
+# --- MAIN APP EXECUTION ---
 def main():
     dp.startup.register(on_startup)
     dp.shutdown.register(on_shutdown)
 
     app = web.Application()
+    
     app.router.add_post('/create_invoice', create_invoice_api)
+    app.router.add_get('/broadcast', trigger_broadcast_api)
     app.router.add_get('/', home)
 
-    webhook_handler = SimpleRequestHandler(dispatcher=dp, bot=bot)
-    webhook_handler.register(app, path=WEBHOOK_PATH)
+    webhook_requests_handler = SimpleRequestHandler(dispatcher=dp, bot=bot)
+    webhook_requests_handler.register(app, path=WEBHOOK_PATH)
     
     setup_application(app, dp, bot=bot)
 
