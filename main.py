@@ -1,48 +1,74 @@
+# --- START OF FILE main.py ---
+
 import os
 import sys
 import logging
 import asyncio
+import sqlite3
+from datetime import datetime
 from aiohttp import web
 from aiogram import Bot, Dispatcher, Router, F, types
 from aiogram.filters import Command
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, LabeledPrice
 from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 # --- LOGGING SETUP ---
 logging.basicConfig(level=logging.INFO, stream=sys.stdout)
 
 # --- CONFIGURATION (ENV VARS) ---
-# Render Environment থেকে ডাটা নিবে
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-APP_URL = os.getenv("APP_URL") 
+APP_URL = os.getenv("APP_URL")
 
-# ভেরিয়েবল ঠিকমতো সেট না থাকলে কোড রান হবে না এবং লগে এরর দেখাবে
+# Check Environment Variables
 if not BOT_TOKEN:
-    logging.error("❌ CRITICAL ERROR: BOT_TOKEN is missing in Render Settings!")
+    logging.error("❌ CRITICAL ERROR: BOT_TOKEN is missing!")
     sys.exit(1)
 
 if not APP_URL:
-    logging.error("❌ CRITICAL ERROR: APP_URL is missing in Render Settings!")
+    logging.error("❌ CRITICAL ERROR: APP_URL is missing!")
     sys.exit(1)
 
-# Webhook পাথ কনফিগারেশন
 WEBHOOK_PATH = "/webhook"
 WEBHOOK_URL = f"{APP_URL}{WEBHOOK_PATH}"
 
+# --- DATABASE SETUP (SQLite) ---
+# ইউজারদের আইডি সেভ করার জন্য, যাতে ব্রডকাস্ট পাঠানো যায়
+DB_FILE = "snowman_users.db"
+
+def init_db():
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute('''CREATE TABLE IF NOT EXISTS users (user_id INTEGER PRIMARY KEY)''')
+    conn.commit()
+    conn.close()
+
+def add_user(user_id):
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    try:
+        cursor.execute("INSERT OR IGNORE INTO users (user_id) VALUES (?)", (user_id,))
+        conn.commit()
+    except Exception as e:
+        logging.error(f"DB Error: {e}")
+    finally:
+        conn.close()
+
+def get_all_users():
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute("SELECT user_id FROM users")
+    users = [row[0] for row in cursor.fetchall()]
+    conn.close()
+    return users
+
 # --- SHOP CONFIGURATION ---
-# 1 Telegram Star = Approx 1-2 Taka value logic
 SHOP_ITEMS = {
-    'coin_starter': {'price': 10, 'amount': 100},  # 10 Stars
+    'coin_starter': {'price': 10, 'amount': 100},
     'coin_small': {'price': 50, 'amount': 1},
     'coin_medium': {'price': 100, 'amount': 1},
     'coin_large': {'price': 250, 'amount': 1},
     'coin_mega': {'price': 500, 'amount': 1},
-    'booster_3d': {'price': 20, 'amount': 1},
-    'booster_15d': {'price': 70, 'amount': 1},
-    'booster_30d': {'price': 120, 'amount': 1},
-    'autotap_1d': {'price': 20, 'amount': 1},
-    'autotap_7d': {'price': 80, 'amount': 1},
-    'autotap_30d': {'price': 200, 'amount': 1},
 }
 
 # --- BOT INITIALIZATION ---
@@ -50,14 +76,15 @@ bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 router = Router()
 dp.include_router(router)
+scheduler = AsyncIOScheduler()
 
 # --- BUTTONS ---
 def get_main_keyboard():
     kb = [
-        [InlineKeyboardButton(text="❄️Start App☃️", url="https://t.me/snowmanadventurebot?startapp")],
+        [InlineKeyboardButton(text="❄️ Start App ☃️", url="https://t.me/snowmanadventurebot?startapp")],
         [
-            InlineKeyboardButton(text="❄️ Channel 🎯", url="https://t.me/snowmanadventurecommunity"),
-            InlineKeyboardButton(text="❄️ Discuss 🥶", url="https://t.me/snowmanadventurediscuss")
+            InlineKeyboardButton(text="❄️ Join Channel 🎯", url="https://t.me/snowmanadventurecommunity"),
+            InlineKeyboardButton(text="❄️ Discussion Group 🥶", url="https://t.me/snowmanadventurediscuss")
         ]
     ]
     return InlineKeyboardMarkup(inline_keyboard=kb)
@@ -66,46 +93,62 @@ def get_main_keyboard():
 
 @router.message(Command("start"))
 async def cmd_start(message: types.Message):
+    user_id = message.from_user.id
     first_name = message.from_user.first_name
+    
+    # ইউজার ডাটাবেসে সেভ করা হচ্ছে
+    add_user(user_id)
+    
+    # ফরম্যাটেড মেসেজ (HTML Mode)
     text = f"""
-❄️☃️ Hey {first_name}, Welcome to Snowman Adventure! ☃️❄️
-Brrrr… the snow is falling and your journey starts RIGHT NOW! 🌨️✨
+<b>❄️☃️ Hey {first_name}, Welcome to Snowman Adventure! ☃️❄️</b>
+
+Brrrr… the snow is falling and your journey starts <b>RIGHT NOW!</b> 🌨️✨
+
 Tap the Snowman, earn shiny coins 💰, level up 🚀 and unlock cool rewards 🎁
-Here’s what’s waiting for you 👇
-➡️ Tap & earn coins ❄️
-➡️ Complete daily tasks 🔑
-➡️ Spin & win surprises 🎡
-➡️ Invite friends and earn MORE 💫
-➡️ Climb the leaderboard 🏆
-Every tap matters.
-Every coin counts.
-And you are now part of the Snowman family 🤍☃️
+
+<b>Here’s what’s waiting for you 👇</b>
+
+➡️ <b>Tap & Earn:</b> Collect coins instantly ❄️
+➡️ <b>Daily Tasks:</b> Complete and win 🔑
+➡️ <b>Lucky Spin:</b> Spin & win surprises 🎡
+➡️ <b>Invite Friends:</b> Earn MORE rewards 💫
+➡️ <b>Leaderboard:</b> Climb to the top 🏆
+
+Every tap matters. Every coin counts.
+And you are now part of the <b>Snowman family</b> 🤍☃️
+
 So don’t wait…
-👉 Start tapping, start winning, and enjoy the adventure! 🎮❄️
+👉 <b>Start tapping, start winning, and enjoy the adventure! 🎮❄️</b>
     """
-    await message.answer(text, reply_markup=get_main_keyboard())
+    await message.answer(text, parse_mode="HTML", reply_markup=get_main_keyboard())
 
 @router.message(F.text)
 async def echo_all(message: types.Message):
     first_name = message.from_user.first_name
+    
     text = f"""
-❄️☃️ Hey {first_name}, Welcome Back to Snowman Adventure! ☃️❄️
+<b>❄️☃️ Hey {first_name}, Welcome Back! ☃️❄️</b>
+
 Snowman heard you typing… and got excited! 😄💫
 That means it’s time to jump back into the icy fun ❄️🎮
-What’s waiting for you right now 👇
+
+<b>What’s waiting for you right now 👇</b>
+
 ➡️ Tap the Snowman & earn coins 💰
 ➡️ Complete tasks for instant rewards 🎯
 ➡️ Spin and win surprises 🎡
 ➡️ Invite friends & grow faster 👥
 ➡️ Chase the top of the leaderboard 🏆
+
 Every click brings progress.
 Every moment brings rewards. 🌟
-Choose your next move below and keep the adventure going ⬇️
 
-❄️ Stay cool. Keep tapping.
-Snowman Adventure never sleeps! ☃️🔥
+<b>Choose your next move below and keep the adventure going ⬇️</b>
+
+❄️ <i>Stay cool. Keep tapping. Snowman Adventure never sleeps!</i> ☃️🔥
     """
-    await message.answer(text, reply_markup=get_main_keyboard())
+    await message.answer(text, parse_mode="HTML", reply_markup=get_main_keyboard())
 
 # --- PAYMENT HANDLERS ---
 @router.pre_checkout_query()
@@ -114,21 +157,58 @@ async def on_pre_checkout(pre_checkout_query: types.PreCheckoutQuery):
 
 @router.message(F.successful_payment)
 async def on_successful_payment(message: types.Message):
-    await message.answer("❄️ Payment Successful! Your items have been added. Restart the game to see changes! ☃️")
+    await message.answer("❄️ <b>Payment Successful!</b> Your items have been added. Restart the game to see changes! ☃️", parse_mode="HTML")
 
-# --- WEBHOOK TRIGGERS ---
-async def on_startup(bot: Bot):
-    logging.info(f"🔗 Setting webhook to: {WEBHOOK_URL}")
-    await bot.set_webhook(WEBHOOK_URL)
+# --- DAILY BROADCAST TASK (AUTOMATIC) ---
+async def send_daily_broadcast():
+    """এই ফাংশনটি অটোমেটিক প্রতিদিন রান হবে"""
+    logging.info("⏳ Starting Daily Broadcast...")
+    
+    users = get_all_users()
+    if not users:
+        logging.info("No users found to broadcast.")
+        return
 
-async def on_shutdown(bot: Bot):
-    logging.info("🔌 Deleting webhook...")
-    await bot.delete_webhook()
+    caption = """
+<b>❄️🚨 HEY! Your Daily Rewards Are MELTING AWAY! 🚨❄️</b>
 
-# --- API ROUTES (SHOP & BROADCAST) ---
+Snowman is waving at you right now ☃️👋
+Today = <b>FREE rewards</b>, but only if you show up! 😱🎁
+
+<b>🔥 Don’t skip this 👇</b>
+
+➡️ 🎡 <b>Daily Spin is ACTIVE</b> — one spin can change your day!
+➡️ 🎯 <b>Daily Tasks are OPEN</b> — quick actions, instant coins 💰
+➡️ ⏳ Miss today = lose today’s rewards forever
+
+Just 30 seconds can mean:
+💰 More coins
+🚀 Faster levels
+🏆 Higher rank
+
+The snow is falling… the prizes are waiting…
+👉 <b>Open Snowman Adventure NOW and claim today’s wins! 🎮❄️</b>
+
+<i>Tap smart. Spin daily. Stay ahead.</i> ☃️💫
+    """
+    
+    # আপনার দেওয়া ইমেজ ফাইল আইডি (এটি ভুল হলে এরর আসতে পারে, তাই ট্রাই-এক্সেপ্ট ব্লক আছে)
+    photo_file_id = "AgACAgUAAxkBAAE_9f1pVL83a2yTeglyOW1P3rQRmcT0iwACpwtrGxjJmVYBpQKTP5TwDQEAAwIAA3kAAzgE"
+    
+    count = 0
+    for user_id in users:
+        try:
+            await bot.send_photo(chat_id=user_id, photo=photo_file_id, caption=caption, parse_mode="HTML", reply_markup=get_main_keyboard())
+            count += 1
+            await asyncio.sleep(0.05) # Telegram Limit এড়ানোর জন্য ছোট বিরতি
+        except Exception as e:
+            logging.error(f"Failed to send to {user_id}: {e}")
+            
+    logging.info(f"✅ Daily Broadcast sent to {count} users.")
+
+# --- API ROUTES ---
 
 async def create_invoice_api(request):
-    """ফ্রন্টএন্ড থেকে পেমেন্ট রিকোয়েস্ট হ্যান্ডেল করে"""
     try:
         data = await request.json()
         item_id = data.get('item_id')
@@ -139,85 +219,61 @@ async def create_invoice_api(request):
 
         item = SHOP_ITEMS[item_id]
         
-        # Telegram Stars Invoice (XTR currency)
         prices = [LabeledPrice(label=item_id, amount=item['price'])]
         
         link = await bot.create_invoice_link(
             title="Snowman Shop",
             description=f"Purchase {item_id}",
             payload=f"{user_id}_{item_id}",
-            provider_token="", # Stars এর জন্য এটি ফাঁকা থাকে
+            provider_token="",
             currency="XTR",
             prices=prices,
         )
         return web.json_response({"result": link})
     except Exception as e:
-        logging.error(f"Invoice Error: {e}")
         return web.json_response({"error": str(e)}, status=500)
 
-async def trigger_broadcast(request):
-    """ডেইলি ব্রডকাস্ট পাঠানোর ফাংশন (Cron Job এর জন্য)"""
-    
-    # টেস্ট করার জন্য URL এর সাথে ?chat_id=12345 দিয়ে কল করা যাবে
-    # প্রোডাকশনে আপনি ডাটাবেস থেকে সব ইউজার আইডি লুপ করবেন
-    chat_id = request.rel_url.query.get('chat_id')
-    
-    caption = """
-❄️🚨 HEY! Your Daily Rewards Are MELTING AWAY! 🚨❄️
-Snowman is waving at you right now ☃️👋
-Today = FREE rewards, but only if you show up! 😱🎁
-🔥 Don’t skip this 👇
-➡️ 🎡 Daily Spin is ACTIVE — one spin can change your day!
-➡️ 🎯 Daily Tasks are OPEN — quick actions, instant coins 💰
-➡️ ⏳ Miss today = lose today’s rewards forever
-Just 30 seconds can mean:
-💰 More coins
-🚀 Faster levels
-🏆 Higher rank
-The snow is falling… the prizes are waiting…
-👉 Open Snowman Adventure NOW and claim today’s wins! 🎮❄️
-Tap smart. Spin daily. Stay ahead. ☃️💫
-    """
-    
-    photo_file_id = "AgACAgUAAxkBAAE_9f1pVL83a2yTeglyOW1P3rQRmcT0iwACpwtrGxjJmVYBpQKTP5TwDQEAAwIAA3kAAzgE"
-
-    try:
-        if chat_id:
-            await bot.send_photo(chat_id=chat_id, photo=photo_file_id, caption=caption, reply_markup=get_main_keyboard())
-            return web.Response(text=f"Broadcast sent to {chat_id}")
-        else:
-            return web.Response(text="Broadcast endpoint active. Provide ?chat_id=... to test.")
-    except Exception as e:
-        return web.Response(text=f"Error: {str(e)}", status=500)
+async def trigger_broadcast_manual(request):
+    """ম্যানুয়ালি ব্রডকাস্ট ট্রিগার করার জন্য"""
+    asyncio.create_task(send_daily_broadcast())
+    return web.Response(text="🚀 Broadcast process started in background!")
 
 async def home(request):
     return web.Response(text="⛄ Snowman Adventure Backend is Running Successfully! ❄️")
 
-# --- MAIN APP EXECUTION ---
+# --- WEBHOOK & STARTUP ---
+async def on_startup(bot: Bot):
+    await bot.set_webhook(WEBHOOK_URL)
+    init_db() # ডাটাবেস তৈরি
+    
+    # অটোমেটিক শিডিউলার সেটআপ (প্রতিদিন সকাল ৮:০০ টায়)
+    scheduler.add_job(send_daily_broadcast, 'cron', hour=8, minute=0)
+    scheduler.start()
+    
+    logging.info(f"🔗 Webhook set to: {WEBHOOK_URL}")
+    logging.info("⏰ Daily Broadcast Scheduler Started (08:00 AM)")
+
+async def on_shutdown(bot: Bot):
+    await bot.delete_webhook()
+    scheduler.shutdown()
+    logging.info("🔌 Bot Shutdown")
+
+# --- MAIN EXECUTION ---
 def main():
-    # Register Startup/Shutdown for Webhook
     dp.startup.register(on_startup)
     dp.shutdown.register(on_shutdown)
 
-    # Setup Web App
     app = web.Application()
     
-    # Routes
     app.router.add_post('/create_invoice', create_invoice_api)
-    app.router.add_get('/broadcast', trigger_broadcast)
+    app.router.add_get('/broadcast', trigger_broadcast_manual) # ম্যানুয়াল কলের জন্য
     app.router.add_get('/', home)
 
-    # Setup Aiogram Webhook Handler
-    webhook_requests_handler = SimpleRequestHandler(
-        dispatcher=dp,
-        bot=bot,
-    )
+    webhook_requests_handler = SimpleRequestHandler(dispatcher=dp, bot=bot)
     webhook_requests_handler.register(app, path=WEBHOOK_PATH)
     
-    # Integrate Bot with Web App
     setup_application(app, dp, bot=bot)
 
-    # Run App
     port = int(os.getenv("PORT", 10000))
     web.run_app(app, host="0.0.0.0", port=port)
 
