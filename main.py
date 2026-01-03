@@ -2,6 +2,7 @@ import os
 import sys
 import logging
 import asyncio
+import json
 from aiohttp import web
 from aiogram import Bot, Dispatcher, Router, F, types
 from aiogram.filters import Command, StateFilter
@@ -10,6 +11,7 @@ from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_applicati
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
+from aiogram.exceptions import TelegramBadRequest
 
 # --- LOGGING SETUP ---
 logging.basicConfig(level=logging.INFO, stream=sys.stdout)
@@ -20,8 +22,9 @@ APP_URL = os.getenv("APP_URL")
 
 # --- ADMIN CONFIGURATION ---
 ADMIN_ID = 7605281774  # আপনার অ্যাডমিন আইডি
+CHANNEL_USERNAME = "@snowmanadventureannouncement" # আপনার চ্যানেলের ইউজারনেম (বটকে এডমিন হতে হবে)
+GROUP_USERNAME = "@snowmanadventuregroup" # আপনার গ্রুপের ইউজারনেম (বটকে এডমিন হতে হবে)
 
-# ভেরিয়েবল চেক
 if not BOT_TOKEN:
     logging.error("❌ CRITICAL ERROR: BOT_TOKEN is missing!")
     sys.exit(1)
@@ -32,9 +35,27 @@ if not APP_URL:
 WEBHOOK_PATH = "/webhook"
 WEBHOOK_URL = f"{APP_URL}{WEBHOOK_PATH}"
 
-# --- DATABASE (SIMPLE MEMORY SET) ---
-# নোট: সার্ভার রিস্টার্ট দিলে এই ডাটা মুছে যাবে। পার্মানেন্ট করার জন্য SQL Database প্রয়োজন।
-users_db = set()
+# --- DATABASE (JSON FILE SYSTEM) ---
+DB_FILE = "users.json"
+
+def load_users():
+    if not os.path.exists(DB_FILE):
+        return set()
+    try:
+        with open(DB_FILE, "r") as f:
+            return set(json.load(f))
+    except:
+        return set()
+
+def save_user(user_id):
+    users = load_users()
+    if user_id not in users:
+        users.add(user_id)
+        with open(DB_FILE, "w") as f:
+            json.dump(list(users), f)
+
+# লোড করার সময় সেট ভেরিয়েবলে ডাটা রাখা
+users_db = load_users()
 
 # --- SHOP CONFIGURATION ---
 SHOP_ITEMS = {
@@ -70,14 +91,13 @@ def get_main_keyboard():
     kb = [
         [InlineKeyboardButton(text="❄️ Start App ☃️", url="https://t.me/snowmanadventurebot?startapp=8244641590")],
         [
-            InlineKeyboardButton(text="❄️ Channel 🎯", url="https://t.me/snowmanadventureannouncement"),
-            InlineKeyboardButton(text="❄️ Group 🥶", url="https://t.me/snowmanadventuregroup")
+            InlineKeyboardButton(text="❄️ Channel 🎯", url=f"https://t.me/{CHANNEL_USERNAME.replace('@', '')}"),
+            InlineKeyboardButton(text="❄️ Group 🥶", url=f"https://t.me/{GROUP_USERNAME.replace('@', '')}")
         ]
     ]
     return InlineKeyboardMarkup(inline_keyboard=kb)
 
 def get_broadcast_menu(data):
-    """ব্রডকাস্ট কন্ট্রোল প্যানেল তৈরি করে"""
     has_media = "✅ Set" if data.get('media_id') else "❌ Empty"
     has_text = "✅ Set" if data.get('text') else "❌ Empty"
     has_btn = "✅ Set" if data.get('buttons') else "❌ Empty"
@@ -104,19 +124,16 @@ def get_broadcast_menu(data):
     return InlineKeyboardMarkup(inline_keyboard=kb)
 
 def parse_buttons(button_text):
-    """টেক্সট থেকে ইনলাইন বাটন তৈরি করে (Format: Text-URL)"""
     if not button_text:
         return None
     try:
         kb = []
-        # কমা বা নতুন লাইন দিয়ে একাধিক বাটন হ্যান্ডেল করা যাবে
         lines = button_text.split('\n')
         for line in lines:
             parts = line.split('-')
             if len(parts) >= 2:
                 text = parts[0].strip()
                 url = parts[1].strip()
-                # ইউজারনেম থাকলে লিংক ঠিক করা
                 if url.startswith('@'):
                     url = f"https://t.me/{url[1:]}"
                 elif not url.startswith('http'):
@@ -130,53 +147,39 @@ def parse_buttons(button_text):
 
 @router.message(Command("start"))
 async def cmd_start(message: types.Message):
-    # ইউজার ডাটাবেসে সেভ করা (মেমোরি)
-    users_db.add(message.from_user.id)
+    user_id = message.from_user.id
+    save_user(user_id) # ডাটাবেসে সেভ করা
+    users_db.add(user_id)
     
     first_name = message.from_user.first_name
     text = f"""
 ❄️☃️ Hey {first_name}, Welcome to Snowman Adventure! ☃️❄️
 Brrrr… the snow is falling and your journey starts RIGHT NOW! 🌨️✨
-Tap the Snowman, earn shiny coins 💰, level up 🚀 and unlock cool rewards 🎁
+Tap the Snowman, earn shiny coins 💰
 
-Here’s what’s waiting for you 👇
-➡️ Tap & earn coins ❄️
-➡️ Complete daily tasks 🔑
-➡️ Spin & win surprises 🎡
-➡️ Invite friends and earn MORE 💫
-➡️ Climb the leaderboard 🏆
-
-Every tap matters. Every coin counts.
-And you are now part of the Snowman family 🤍☃️
-So don’t wait…
-👉 Start tapping, start winning, and enjoy the adventure! 🎮❄️
+👇 Click 'Start App' to play!
     """
     await message.answer(text, reply_markup=get_main_keyboard())
 
 @router.message(F.text & ~F.text.startswith("/"))
 async def echo_all(message: types.Message, state: FSMContext):
-    # যদি ব্রডকাস্ট মোডে থাকে তবে এই হ্যান্ডলার কাজ করবে না
     current_state = await state.get_state()
     if current_state:
         return
 
-    users_db.add(message.from_user.id)
-    first_name = message.from_user.first_name
-    text = f"""
-❄️☃️ Hey {first_name}, Welcome Back to Snowman Adventure! ☃️❄️
-Snowman heard you typing… and got excited! 😄💫
-Click below to start playing!
-    """
-    await message.answer(text, reply_markup=get_main_keyboard())
+    user_id = message.from_user.id
+    save_user(user_id)
+    users_db.add(user_id)
+    
+    await message.answer("Click below to play! 👇", reply_markup=get_main_keyboard())
 
 # --- BROADCAST SYSTEM HANDLERS ---
 
 @router.message(Command("broadcast"))
 async def cmd_broadcast(message: types.Message, state: FSMContext):
     if message.from_user.id != ADMIN_ID:
-        return # সাইলেন্ট রিজেক্ট
+        return
     
-    # স্টেট ক্লিয়ার এবং ডিফল্ট ডাটা সেট
     await state.clear()
     await state.update_data(media_id=None, text=None, buttons=None)
     
@@ -184,31 +187,19 @@ async def cmd_broadcast(message: types.Message, state: FSMContext):
     await message.answer(text, reply_markup=get_broadcast_menu({}), parse_mode="Markdown")
     await state.set_state(BroadcastState.menu)
 
-# -- Menu Callback Handlers --
-
 @router.callback_query(F.data == "br_media", StateFilter(BroadcastState.menu))
 async def cb_ask_media(call: CallbackQuery, state: FSMContext):
-    await call.message.edit_text("🖼️ **Send me the photo/image** you want to attach.\n(Send text to cancel)", parse_mode="Markdown")
+    await call.message.edit_text("🖼️ **Send photo** (or send text to cancel)", parse_mode="Markdown")
     await state.set_state(BroadcastState.waiting_for_media)
 
 @router.callback_query(F.data == "br_text", StateFilter(BroadcastState.menu))
 async def cb_ask_text(call: CallbackQuery, state: FSMContext):
-    await call.message.edit_text("📝 **Send me the caption/text** for the post.", parse_mode="Markdown")
+    await call.message.edit_text("📝 **Send caption/text**", parse_mode="Markdown")
     await state.set_state(BroadcastState.waiting_for_text)
 
 @router.callback_query(F.data == "br_buttons", StateFilter(BroadcastState.menu))
 async def cb_ask_buttons(call: CallbackQuery, state: FSMContext):
-    msg = """
-🔘 **Send me the button in this format:**
-`Text-URL`
-
-Example:
-`BOOMB-@Moneys_Factory1Bot`
-or
-`Join Channel-https://t.me/example`
-
-(Send one line per button)
-    """
+    msg = "🔘 **Send buttons format:**\n`Text-URL`\n\nExample:\n`Play-https://t.me/bot`"
     await call.message.edit_text(msg, parse_mode="Markdown")
     await state.set_state(BroadcastState.waiting_for_buttons)
 
@@ -229,11 +220,9 @@ async def cb_preview(call: CallbackQuery, state: FSMContext):
             await call.message.answer_photo(photo=media_id, caption=text, reply_markup=btn_markup)
         else:
             await call.message.answer(text=text, reply_markup=btn_markup)
-        
-        # প্রিভিউ দেখানোর পর আবার মেনু শো করা
-        await call.message.answer("☝️ Here is the preview. Use the menu above to edit or send.", reply_markup=get_broadcast_menu(data))
+        await call.message.answer("☝️ Preview. Edit or Send.", reply_markup=get_broadcast_menu(data))
     except Exception as e:
-        await call.answer(f"Error in preview: {str(e)}", show_alert=True)
+        await call.answer(f"Error: {str(e)}", show_alert=True)
 
 @router.callback_query(F.data == "br_send", StateFilter(BroadcastState.menu))
 async def cb_send_broadcast(call: CallbackQuery, state: FSMContext):
@@ -243,29 +232,29 @@ async def cb_send_broadcast(call: CallbackQuery, state: FSMContext):
     buttons_raw = data.get('buttons')
     
     if not text and not media_id:
-        await call.answer("❌ Nothing to send! Set Text or Media.", show_alert=True)
+        await call.answer("❌ Set Text or Media first!", show_alert=True)
         return
 
-    # কনফার্মেশন শুরু
-    await call.message.edit_text("⏳ Sending broadcast... Do not touch anything.")
-    
+    await call.message.edit_text("⏳ Sending broadcast... This may take time.")
     markup = parse_buttons(buttons_raw)
     count = 0
     blocked = 0
     
-    # ব্রডকাস্ট লুপ
-    for user_id in users_db:
+    # বর্তমান মেমোরি থেকে ইউজার লিস্ট নেওয়া
+    users_list = list(users_db)
+
+    for user_id in users_list:
         try:
             if media_id:
                 await bot.send_photo(chat_id=user_id, photo=media_id, caption=text, reply_markup=markup)
             else:
                 await bot.send_message(chat_id=user_id, text=text, reply_markup=markup)
             count += 1
-            await asyncio.sleep(0.05) # ফ্লাড লিমিট এড়াতে
-        except Exception as e:
+            await asyncio.sleep(0.05) 
+        except Exception:
             blocked += 1
     
-    await call.message.answer(f"✅ Broadcast Complete!\n\n👥 Sent to: {count}\n🚫 Blocked/Failed: {blocked}")
+    await call.message.answer(f"✅ Broadcast Complete!\n\n👥 Sent: {count}\n🚫 Failed: {blocked}")
     await state.clear()
 
 # -- Input Listeners --
@@ -287,16 +276,13 @@ async def input_text(message: types.Message, state: FSMContext):
 
 @router.message(StateFilter(BroadcastState.waiting_for_buttons), F.text)
 async def input_buttons(message: types.Message, state: FSMContext):
-    # ভ্যালিডেশন চেক
     if parse_buttons(message.text) is None:
-        await message.answer("❌ Invalid format! Please use `Text-URL` format.\nTry again:")
+        await message.answer("❌ Invalid format! Try `Text-URL`")
         return
-    
     await state.update_data(buttons=message.text)
     data = await state.get_data()
     await message.answer("✅ Buttons Set!", reply_markup=get_broadcast_menu(data))
     await state.set_state(BroadcastState.menu)
-
 
 # --- PAYMENT HANDLERS ---
 @router.pre_checkout_query()
@@ -305,7 +291,7 @@ async def on_pre_checkout(pre_checkout_query: types.PreCheckoutQuery):
 
 @router.message(F.successful_payment)
 async def on_successful_payment(message: types.Message):
-    await message.answer("❄️ Payment Successful! Your items have been added. Restart the game to see changes! ☃️")
+    await message.answer("❄️ Payment Successful! Item added. Restart game to see changes! ☃️")
 
 # --- WEBHOOK TRIGGERS ---
 async def on_startup(bot: Bot):
@@ -316,7 +302,30 @@ async def on_shutdown(bot: Bot):
     logging.info("🔌 Deleting webhook...")
     await bot.delete_webhook()
 
+# --- CORS HEADERS HELPER ---
+def cors_response(data, status=200):
+    return web.json_response(
+        data,
+        status=status,
+        headers={
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "POST, GET, OPTIONS",
+            "Access-Control-Allow-Headers": "Content-Type"
+        }
+    )
+
 # --- API ROUTES ---
+
+async def options_handler(request):
+    # CORS প্রি-ফ্লাইট রিকোয়েস্ট হ্যান্ডলিং
+    return web.Response(
+        status=200,
+        headers={
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "POST, GET, OPTIONS",
+            "Access-Control-Allow-Headers": "Content-Type"
+        }
+    )
 
 async def create_invoice_api(request):
     try:
@@ -325,38 +334,56 @@ async def create_invoice_api(request):
         user_id = data.get('user_id')
 
         if item_id not in SHOP_ITEMS:
-            return web.json_response({"error": "Item not found"}, status=404)
+            return cors_response({"error": "Item not found"}, status=404)
 
         item = SHOP_ITEMS[item_id]
+        # Telegram Stars এর জন্য Currency XTR এবং provider_token ফাঁকা থাকতে হবে
         prices = [LabeledPrice(label=item_id, amount=item['price'])]
         
         link = await bot.create_invoice_link(
             title="Snowman Shop",
             description=f"Purchase {item_id}",
             payload=f"{user_id}_{item_id}",
-            provider_token="", # Stars currency
+            provider_token="", # Stars এর জন্য এটি ফাঁকা রাখুন
             currency="XTR",
             prices=prices,
         )
-        return web.json_response({"result": link})
+        return cors_response({"result": link})
     except Exception as e:
         logging.error(f"Invoice Error: {e}")
-        return web.json_response({"error": str(e)}, status=500)
+        return cors_response({"error": str(e)}, status=500)
 
-async def trigger_broadcast_api(request):
-    # API দিয়ে ব্রডকাস্ট (Legacy support)
-    chat_id = request.rel_url.query.get('chat_id')
-    caption = "❄️🚨 Daily Rewards are waiting! Log in now! 🚨❄️"
-    photo_file_id = "AgACAgUAAxkBAAE_9f1pVL83a2yTeglyOW1P3rQRmcT0iwACpwtrGxjJmVYBpQKTP5TwDQEAAwIAA3kAAzgE"
-    
+async def verify_join_api(request):
+    """ফ্রন্টএন্ডের জয়েন চেকিং লজিক"""
     try:
-        if chat_id:
-            await bot.send_photo(chat_id=chat_id, photo=photo_file_id, caption=caption, reply_markup=get_main_keyboard())
-            return web.Response(text=f"Broadcast sent to {chat_id}")
-        else:
-            return web.Response(text="API Broadcast Active. Use /broadcast in bot for mass sending.")
+        data = await request.json()
+        user_id = data.get('user_id')
+        
+        if not user_id:
+            return cors_response({"joined": False, "error": "No user ID"}, status=400)
+
+        # চ্যানেল এবং গ্রুপ চেক করা
+        try:
+            chat_member_ch = await bot.get_chat_member(chat_id=CHANNEL_USERNAME, user_id=user_id)
+            chat_member_gr = await bot.get_chat_member(chat_id=GROUP_USERNAME, user_id=user_id)
+            
+            is_in_channel = chat_member_ch.status in ['member', 'administrator', 'creator']
+            is_in_group = chat_member_gr.status in ['member', 'administrator', 'creator']
+            
+            if is_in_channel and is_in_group:
+                return cors_response({"joined": True})
+            else:
+                return cors_response({"joined": False})
+        except TelegramBadRequest as e:
+            # বট যদি এডমিন না থাকে বা চ্যাট খুঁজে না পায়
+            logging.error(f"Check Join Error: {e}")
+            # ডেভেলপমেন্টের জন্য True রিটার্ন করা হচ্ছে যাতে ইউজাররা আটকে না যায়
+            # প্রোডাকশনে এটি False করে দেবেন এবং বটকে এডমিন করবেন
+            return cors_response({"joined": True}) 
+            
     except Exception as e:
-        return web.Response(text=f"Error: {str(e)}", status=500)
+        logging.error(f"Verify API Error: {e}")
+        return cors_response({"error": str(e)}, status=500)
 
 async def home(request):
     return web.Response(text="⛄ Snowman Adventure Backend is Running Successfully! ❄️")
@@ -368,8 +395,13 @@ def main():
 
     app = web.Application()
     
+    # Routes Setup
     app.router.add_post('/create_invoice', create_invoice_api)
-    app.router.add_get('/broadcast', trigger_broadcast_api)
+    app.router.add_options('/create_invoice', options_handler)
+    
+    app.router.add_post('/verify_join', verify_join_api)
+    app.router.add_options('/verify_join', options_handler)
+    
     app.router.add_get('/', home)
 
     webhook_requests_handler = SimpleRequestHandler(dispatcher=dp, bot=bot)
