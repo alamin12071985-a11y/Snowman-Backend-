@@ -17,14 +17,17 @@ from aiogram.exceptions import TelegramBadRequest
 logging.basicConfig(level=logging.INFO, stream=sys.stdout)
 
 # --- CONFIGURATION (ENV VARS) ---
+# These must be set in your Render/Server Environment Variables
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 APP_URL = os.getenv("APP_URL")
 
-# --- ADMIN CONFIGURATION ---
-ADMIN_ID = 7605281774  # আপনার অ্যাডমিন আইডি
-CHANNEL_USERNAME = "@snowmanadventureannouncement" # আপনার চ্যানেলের ইউজারনেম (বটকে এডমিন হতে হবে)
-GROUP_USERNAME = "@snowmanadventuregroup" # আপনার গ্রুপের ইউজারনেম (বটকে এডমিন হতে হবে)
+# --- ADMIN & CHANNEL CONFIGURATION ---
+# Replace these with your actual IDs and Usernames
+ADMIN_ID = 7605281774  
+CHANNEL_USERNAME = "@snowmanadventureannouncement" 
+GROUP_USERNAME = "@snowmanadventuregroup" 
 
+# Validation
 if not BOT_TOKEN:
     logging.error("❌ CRITICAL ERROR: BOT_TOKEN is missing!")
     sys.exit(1)
@@ -35,7 +38,7 @@ if not APP_URL:
 WEBHOOK_PATH = "/webhook"
 WEBHOOK_URL = f"{APP_URL}{WEBHOOK_PATH}"
 
-# --- DATABASE (JSON FILE SYSTEM) ---
+# --- DATABASE (Simple JSON for Broadcasts) ---
 DB_FILE = "users.json"
 
 def load_users():
@@ -54,10 +57,9 @@ def save_user(user_id):
         with open(DB_FILE, "w") as f:
             json.dump(list(users), f)
 
-# লোড করার সময় সেট ভেরিয়েবলে ডাটা রাখা
 users_db = load_users()
 
-# --- SHOP CONFIGURATION ---
+# --- SHOP ITEMS (Telegram Stars - XTR) ---
 SHOP_ITEMS = {
     'coin_starter': {'price': 10, 'amount': 100},
     'coin_small': {'price': 50, 'amount': 1},
@@ -72,14 +74,14 @@ SHOP_ITEMS = {
     'autotap_30d': {'price': 200, 'amount': 1},
 }
 
-# --- FSM STATES FOR BROADCAST ---
+# --- FSM STATES ---
 class BroadcastState(StatesGroup):
     menu = State()
     waiting_for_media = State()
     waiting_for_text = State()
     waiting_for_buttons = State()
 
-# --- BOT INITIALIZATION ---
+# --- BOT SETUP ---
 bot = Bot(token=BOT_TOKEN)
 storage = MemoryStorage()
 dp = Dispatcher(storage=storage)
@@ -88,11 +90,12 @@ dp.include_router(router)
 
 # --- KEYBOARDS ---
 def get_main_keyboard():
+    # Update the startapp URL with your actual bot username
     kb = [
-        [InlineKeyboardButton(text="❄️ Start App ☃️", url="https://t.me/snowmanadventurebot?startapp=8244641590")],
+        [InlineKeyboardButton(text="❄️ Play Game ☃️", url="https://t.me/snowmanadventurebot/SnowmanAdventure")],
         [
-            InlineKeyboardButton(text="❄️ Channel 🎯", url=f"https://t.me/{CHANNEL_USERNAME.replace('@', '')}"),
-            InlineKeyboardButton(text="❄️ Group 🥶", url=f"https://t.me/{GROUP_USERNAME.replace('@', '')}")
+            InlineKeyboardButton(text="📢 Channel", url=f"https://t.me/{CHANNEL_USERNAME.replace('@', '')}"),
+            InlineKeyboardButton(text="💬 Group", url=f"https://t.me/{GROUP_USERNAME.replace('@', '')}")
         ]
     ]
     return InlineKeyboardMarkup(inline_keyboard=kb)
@@ -143,38 +146,26 @@ def parse_buttons(button_text):
     except:
         return None
 
-# --- BASIC HANDLERS ---
+# --- BOT COMMAND HANDLERS ---
 
 @router.message(Command("start"))
 async def cmd_start(message: types.Message):
     user_id = message.from_user.id
-    save_user(user_id) # ডাটাবেসে সেভ করা
+    save_user(user_id)
     users_db.add(user_id)
     
     first_name = message.from_user.first_name
     text = f"""
-❄️☃️ Hey {first_name}, Welcome to Snowman Adventure! ☃️❄️
-Brrrr… the snow is falling and your journey starts RIGHT NOW! 🌨️✨
-Tap the Snowman, earn shiny coins 💰
+❄️☃️ **Hello {first_name}!** ☃️❄️
 
-👇 Click 'Start App' to play!
+Welcome to **Snowman Adventure**! 
+Tap, Earn, and Invite friends to win real rewards. 🌨️✨
+
+👇 **Click Play Game to start!**
     """
-    await message.answer(text, reply_markup=get_main_keyboard())
+    await message.answer(text, reply_markup=get_main_keyboard(), parse_mode="Markdown")
 
-@router.message(F.text & ~F.text.startswith("/"))
-async def echo_all(message: types.Message, state: FSMContext):
-    current_state = await state.get_state()
-    if current_state:
-        return
-
-    user_id = message.from_user.id
-    save_user(user_id)
-    users_db.add(user_id)
-    
-    await message.answer("Click below to play! 👇", reply_markup=get_main_keyboard())
-
-# --- BROADCAST SYSTEM HANDLERS ---
-
+# --- BROADCAST LOGIC ---
 @router.message(Command("broadcast"))
 async def cmd_broadcast(message: types.Message, state: FSMContext):
     if message.from_user.id != ADMIN_ID:
@@ -182,9 +173,7 @@ async def cmd_broadcast(message: types.Message, state: FSMContext):
     
     await state.clear()
     await state.update_data(media_id=None, text=None, buttons=None)
-    
-    text = "📢 **Broadcast Menu**\n\nConfigure your broadcast below using the buttons."
-    await message.answer(text, reply_markup=get_broadcast_menu({}), parse_mode="Markdown")
+    await message.answer("📢 **Broadcast Menu**", reply_markup=get_broadcast_menu({}), parse_mode="Markdown")
     await state.set_state(BroadcastState.menu)
 
 @router.callback_query(F.data == "br_media", StateFilter(BroadcastState.menu))
@@ -214,7 +203,6 @@ async def cb_preview(call: CallbackQuery, state: FSMContext):
     media_id = data.get('media_id')
     text = data.get('text') or "No text set."
     btn_markup = parse_buttons(data.get('buttons'))
-
     try:
         if media_id:
             await call.message.answer_photo(photo=media_id, caption=text, reply_markup=btn_markup)
@@ -239,8 +227,6 @@ async def cb_send_broadcast(call: CallbackQuery, state: FSMContext):
     markup = parse_buttons(buttons_raw)
     count = 0
     blocked = 0
-    
-    # বর্তমান মেমোরি থেকে ইউজার লিস্ট নেওয়া
     users_list = list(users_db)
 
     for user_id in users_list:
@@ -256,8 +242,6 @@ async def cb_send_broadcast(call: CallbackQuery, state: FSMContext):
     
     await call.message.answer(f"✅ Broadcast Complete!\n\n👥 Sent: {count}\n🚫 Failed: {blocked}")
     await state.clear()
-
-# -- Input Listeners --
 
 @router.message(StateFilter(BroadcastState.waiting_for_media), F.photo)
 async def input_media(message: types.Message, state: FSMContext):
@@ -291,9 +275,9 @@ async def on_pre_checkout(pre_checkout_query: types.PreCheckoutQuery):
 
 @router.message(F.successful_payment)
 async def on_successful_payment(message: types.Message):
-    await message.answer("❄️ Payment Successful! Item added. Restart game to see changes! ☃️")
+    await message.answer("✅ Payment Successful! Item added.")
 
-# --- WEBHOOK TRIGGERS ---
+# --- WEBHOOK SETUP ---
 async def on_startup(bot: Bot):
     logging.info(f"🔗 Setting webhook to: {WEBHOOK_URL}")
     await bot.set_webhook(WEBHOOK_URL)
@@ -302,7 +286,7 @@ async def on_shutdown(bot: Bot):
     logging.info("🔌 Deleting webhook...")
     await bot.delete_webhook()
 
-# --- CORS HEADERS HELPER ---
+# --- CORS HELPER (Crucial for Frontend Access) ---
 def cors_response(data, status=200):
     return web.json_response(
         data,
@@ -310,24 +294,24 @@ def cors_response(data, status=200):
         headers={
             "Access-Control-Allow-Origin": "*",
             "Access-Control-Allow-Methods": "POST, GET, OPTIONS",
-            "Access-Control-Allow-Headers": "Content-Type"
+            "Access-Control-Allow-Headers": "Content-Type, Authorization"
         }
     )
 
-# --- API ROUTES ---
-
 async def options_handler(request):
-    # CORS প্রি-ফ্লাইট রিকোয়েস্ট হ্যান্ডলিং
     return web.Response(
         status=200,
         headers={
             "Access-Control-Allow-Origin": "*",
             "Access-Control-Allow-Methods": "POST, GET, OPTIONS",
-            "Access-Control-Allow-Headers": "Content-Type"
+            "Access-Control-Allow-Headers": "Content-Type, Authorization"
         }
     )
 
+# --- API ENDPOINTS ---
+
 async def create_invoice_api(request):
+    """Handles creating invoice links for Telegram Stars"""
     try:
         data = await request.json()
         item_id = data.get('item_id')
@@ -337,14 +321,13 @@ async def create_invoice_api(request):
             return cors_response({"error": "Item not found"}, status=404)
 
         item = SHOP_ITEMS[item_id]
-        # Telegram Stars এর জন্য Currency XTR এবং provider_token ফাঁকা থাকতে হবে
         prices = [LabeledPrice(label=item_id, amount=item['price'])]
         
         link = await bot.create_invoice_link(
             title="Snowman Shop",
             description=f"Purchase {item_id}",
             payload=f"{user_id}_{item_id}",
-            provider_token="", # Stars এর জন্য এটি ফাঁকা রাখুন
+            provider_token="", # Empty for XTR (Stars)
             currency="XTR",
             prices=prices,
         )
@@ -354,7 +337,10 @@ async def create_invoice_api(request):
         return cors_response({"error": str(e)}, status=500)
 
 async def verify_join_api(request):
-    """ফ্রন্টএন্ডের জয়েন চেকিং লজিক"""
+    """
+    Checks if a user has joined the required Channel and Group.
+    Returns: {"joined": true} or {"joined": false}
+    """
     try:
         data = await request.json()
         user_id = data.get('user_id')
@@ -362,40 +348,46 @@ async def verify_join_api(request):
         if not user_id:
             return cors_response({"joined": False, "error": "No user ID"}, status=400)
 
-        # চ্যানেল এবং গ্রুপ চেক করা
+        # Ensure user_id is an integer
+        try:
+            user_id = int(user_id)
+        except ValueError:
+            return cors_response({"joined": False, "error": "Invalid User ID"})
+
+        # Check Memberships
         try:
             chat_member_ch = await bot.get_chat_member(chat_id=CHANNEL_USERNAME, user_id=user_id)
             chat_member_gr = await bot.get_chat_member(chat_id=GROUP_USERNAME, user_id=user_id)
             
-            is_in_channel = chat_member_ch.status in ['member', 'administrator', 'creator']
-            is_in_group = chat_member_gr.status in ['member', 'administrator', 'creator']
+            valid_statuses = ['member', 'administrator', 'creator']
+            is_in_channel = chat_member_ch.status in valid_statuses
+            is_in_group = chat_member_gr.status in valid_statuses
             
             if is_in_channel and is_in_group:
                 return cors_response({"joined": True})
             else:
                 return cors_response({"joined": False})
+                
         except TelegramBadRequest as e:
-            # বট যদি এডমিন না থাকে বা চ্যাট খুঁজে না পায়
-            logging.error(f"Check Join Error: {e}")
-            # ডেভেলপমেন্টের জন্য True রিটার্ন করা হচ্ছে যাতে ইউজাররা আটকে না যায়
-            # প্রোডাকশনে এটি False করে দেবেন এবং বটকে এডমিন করবেন
-            return cors_response({"joined": True}) 
+            # Common error: Bot is not admin in the channel/group
+            logging.error(f"Telegram API Error (Check Bot Admin Status): {e}")
+            return cors_response({"joined": False, "error": "Verification failed. Bot may not be admin."})
             
     except Exception as e:
-        logging.error(f"Verify API Error: {e}")
+        logging.error(f"Verify API General Error: {e}")
         return cors_response({"error": str(e)}, status=500)
 
 async def home(request):
-    return web.Response(text="⛄ Snowman Adventure Backend is Running Successfully! ❄️")
+    return web.Response(text="⛄ Snowman Adventure Backend is Running! ❄️")
 
-# --- MAIN APP EXECUTION ---
+# --- APP EXECUTION ---
 def main():
     dp.startup.register(on_startup)
     dp.shutdown.register(on_shutdown)
 
     app = web.Application()
     
-    # Routes Setup
+    # Routes
     app.router.add_post('/create_invoice', create_invoice_api)
     app.router.add_options('/create_invoice', options_handler)
     
