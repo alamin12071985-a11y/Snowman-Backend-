@@ -90,7 +90,7 @@ dp.include_router(router)
 def get_main_keyboard():
     # Update your bot username correctly in the URL if needed
     kb = [
-        [InlineKeyboardButton(text="❄️ Play Game ☃️", url="https://t.me/snowmanadventurebot/SnowmanAdventure")],
+        [InlineKeyboardButton(text="❄️ Play Game ☃️", url="https://t.me/snowmanadventurebot/app?startapp=7605281774")],
         [
             InlineKeyboardButton(text="📢 Channel", url=f"https://t.me/{CHANNEL_USERNAME.replace('@', '')}"),
             InlineKeyboardButton(text="💬 Group", url=f"https://t.me/{GROUP_USERNAME.replace('@', '')}")
