@@ -17,12 +17,10 @@ from aiogram.exceptions import TelegramBadRequest
 logging.basicConfig(level=logging.INFO, stream=sys.stdout)
 
 # --- CONFIGURATION (ENV VARS) ---
-# These must be set in your Render/Server Environment Variables
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 APP_URL = os.getenv("APP_URL")
 
-# --- ADMIN & CHANNEL CONFIGURATION ---
-# Replace these with your actual IDs and Usernames
+# --- ADMIN CONFIGURATION ---
 ADMIN_ID = 7605281774  
 CHANNEL_USERNAME = "@snowmanadventureannouncement" 
 GROUP_USERNAME = "@snowmanadventuregroup" 
@@ -38,7 +36,7 @@ if not APP_URL:
 WEBHOOK_PATH = "/webhook"
 WEBHOOK_URL = f"{APP_URL}{WEBHOOK_PATH}"
 
-# --- DATABASE (Simple JSON for Broadcasts) ---
+# --- DATABASE (Simple JSON) ---
 DB_FILE = "users.json"
 
 def load_users():
@@ -59,7 +57,7 @@ def save_user(user_id):
 
 users_db = load_users()
 
-# --- SHOP ITEMS (Telegram Stars - XTR) ---
+# --- SHOP ITEMS (Stars XTR) ---
 SHOP_ITEMS = {
     'coin_starter': {'price': 10, 'amount': 100},
     'coin_small': {'price': 50, 'amount': 1},
@@ -90,7 +88,7 @@ dp.include_router(router)
 
 # --- KEYBOARDS ---
 def get_main_keyboard():
-    # Update the startapp URL with your actual bot username
+    # Update your bot username correctly in the URL if needed
     kb = [
         [InlineKeyboardButton(text="❄️ Play Game ☃️", url="https://t.me/snowmanadventurebot/SnowmanAdventure")],
         [
@@ -146,7 +144,7 @@ def parse_buttons(button_text):
     except:
         return None
 
-# --- BOT COMMAND HANDLERS ---
+# --- HANDLERS ---
 
 @router.message(Command("start"))
 async def cmd_start(message: types.Message):
@@ -155,22 +153,70 @@ async def cmd_start(message: types.Message):
     users_db.add(user_id)
     
     first_name = message.from_user.first_name
+    
+    # New Start Message
     text = f"""
-❄️☃️ **Hello {first_name}!** ☃️❄️
+❄️☃️ Hey {first_name}, Welcome to Snowman Adventure! ☃️❄️
 
-Welcome to **Snowman Adventure**! 
-Tap, Earn, and Invite friends to win real rewards. 🌨️✨
+Brrrr… the snow is falling and your journey starts RIGHT NOW! 🌨️✨
 
-👇 **Click Play Game to start!**
+Tap the Snowman, earn shiny coins 💰, level up 🚀 and unlock cool rewards 🎁
+
+Here’s what’s waiting for you 👇
+➡️ Tap & earn coins ❄️
+➡️ Complete daily tasks 🔑
+➡️ Spin & win surprises 🎡
+➡️ Invite friends and earn MORE 💫
+➡️ Climb the leaderboard 🏆
+
+Every tap matters.
+Every coin counts.
+And you are now part of the Snowman family 🤍☃️
+
+So don’t wait…
+👉 Start tapping, start winning, and enjoy the adventure! 🎮❄️
     """
-    await message.answer(text, reply_markup=get_main_keyboard(), parse_mode="Markdown")
+    await message.answer(text, reply_markup=get_main_keyboard())
 
-# --- BROADCAST LOGIC ---
+# Handler for generic text (Reply Message)
+@router.message(F.text & ~F.text.startswith("/"))
+async def echo_all(message: types.Message):
+    user_id = message.from_user.id
+    save_user(user_id)
+    users_db.add(user_id)
+    
+    first_name = message.from_user.first_name
+    
+    # New Reply Message
+    text = f"""
+❄️☃️ Hey {first_name}, Welcome Back to Snowman Adventure! ☃️❄️
+
+Snowman heard you typing… and got excited! 😄💫
+That means it’s time to jump back into the icy fun ❄️🎮
+
+What’s waiting for you right now 👇
+➡️ Tap the Snowman & earn coins 💰
+➡️ Complete tasks for instant rewards 🎯
+➡️ Spin and win surprises 🎡
+➡️ Invite friends & grow faster 👥
+➡️ Chase the top of the leaderboard 🏆
+
+Every click brings progress.
+Every moment brings rewards. 🌟
+
+Choose your next move below and keep the adventure going ⬇️
+
+❄️ Stay cool. Keep tapping.
+Snowman Adventure never sleeps! ☃️🔥
+    """
+    await message.answer(text, reply_markup=get_main_keyboard())
+
+# --- BROADCAST HANDLERS ---
+
 @router.message(Command("broadcast"))
 async def cmd_broadcast(message: types.Message, state: FSMContext):
     if message.from_user.id != ADMIN_ID:
         return
-    
     await state.clear()
     await state.update_data(media_id=None, text=None, buttons=None)
     await message.answer("📢 **Broadcast Menu**", reply_markup=get_broadcast_menu({}), parse_mode="Markdown")
@@ -277,7 +323,7 @@ async def on_pre_checkout(pre_checkout_query: types.PreCheckoutQuery):
 async def on_successful_payment(message: types.Message):
     await message.answer("✅ Payment Successful! Item added.")
 
-# --- WEBHOOK SETUP ---
+# --- WEBHOOK ---
 async def on_startup(bot: Bot):
     logging.info(f"🔗 Setting webhook to: {WEBHOOK_URL}")
     await bot.set_webhook(WEBHOOK_URL)
@@ -286,7 +332,7 @@ async def on_shutdown(bot: Bot):
     logging.info("🔌 Deleting webhook...")
     await bot.delete_webhook()
 
-# --- CORS HELPER (Crucial for Frontend Access) ---
+# --- CORS HELPER ---
 def cors_response(data, status=200):
     return web.json_response(
         data,
@@ -311,7 +357,6 @@ async def options_handler(request):
 # --- API ENDPOINTS ---
 
 async def create_invoice_api(request):
-    """Handles creating invoice links for Telegram Stars"""
     try:
         data = await request.json()
         item_id = data.get('item_id')
@@ -327,7 +372,7 @@ async def create_invoice_api(request):
             title="Snowman Shop",
             description=f"Purchase {item_id}",
             payload=f"{user_id}_{item_id}",
-            provider_token="", # Empty for XTR (Stars)
+            provider_token="", 
             currency="XTR",
             prices=prices,
         )
@@ -338,8 +383,7 @@ async def create_invoice_api(request):
 
 async def verify_join_api(request):
     """
-    Checks if a user has joined the required Channel and Group.
-    Returns: {"joined": true} or {"joined": false}
+    Checks if a user has joined the required Channel and Group with detailed logging.
     """
     try:
         data = await request.json()
@@ -354,27 +398,59 @@ async def verify_join_api(request):
         except ValueError:
             return cors_response({"joined": False, "error": "Invalid User ID"})
 
-        # Check Memberships
+        # Valid statuses including 'restricted'
+        valid_statuses = ['member', 'administrator', 'creator', 'restricted']
+
+        # --- CHECK CHANNEL ---
+        channel_joined = False
         try:
             chat_member_ch = await bot.get_chat_member(chat_id=CHANNEL_USERNAME, user_id=user_id)
-            chat_member_gr = await bot.get_chat_member(chat_id=GROUP_USERNAME, user_id=user_id)
+            status_ch = chat_member_ch.status
+            logging.info(f"👤 User {user_id} Channel Status: {status_ch}") 
             
-            valid_statuses = ['member', 'administrator', 'creator']
-            is_in_channel = chat_member_ch.status in valid_statuses
-            is_in_group = chat_member_gr.status in valid_statuses
-            
-            if is_in_channel and is_in_group:
-                return cors_response({"joined": True})
-            else:
-                return cors_response({"joined": False})
+            if status_ch in valid_statuses:
+                channel_joined = True
+            elif status_ch == 'left':
+                logging.warning(f"❌ User {user_id} has LEFT the channel.")
+            elif status_ch == 'kicked':
+                logging.warning(f"🚫 User {user_id} is BANNED from channel.")
                 
         except TelegramBadRequest as e:
-            # Common error: Bot is not admin in the channel/group
-            logging.error(f"Telegram API Error (Check Bot Admin Status): {e}")
-            return cors_response({"joined": False, "error": "Verification failed. Bot may not be admin."})
+            logging.error(f"⚠️ Channel Check Failed (Bot Admin?): {e}")
+            channel_joined = False
+        except Exception as e:
+            logging.error(f"⚠️ Channel Error: {e}")
+            channel_joined = False
+
+        # --- CHECK GROUP ---
+        group_joined = False
+        try:
+            chat_member_gr = await bot.get_chat_member(chat_id=GROUP_USERNAME, user_id=user_id)
+            status_gr = chat_member_gr.status
+            logging.info(f"👤 User {user_id} Group Status: {status_gr}") 
+            
+            if status_gr in valid_statuses:
+                group_joined = True
+            elif status_gr == 'left':
+                logging.warning(f"❌ User {user_id} has LEFT the group.")
+                
+        except TelegramBadRequest as e:
+            logging.error(f"⚠️ Group Check Failed (Bot Admin?): {e}")
+            group_joined = False
+        except Exception as e:
+            logging.error(f"⚠️ Group Error: {e}")
+            group_joined = False
+
+        # --- FINAL DECISION ---
+        if channel_joined and group_joined:
+            logging.info(f"✅ User {user_id} verified successfully!")
+            return cors_response({"joined": True})
+        else:
+            logging.info(f"⛔ Verification Failed for {user_id}. Ch: {channel_joined}, Gr: {group_joined}")
+            return cors_response({"joined": False})
             
     except Exception as e:
-        logging.error(f"Verify API General Error: {e}")
+        logging.error(f"🔥 Verify API Critical Error: {e}")
         return cors_response({"error": str(e)}, status=500)
 
 async def home(request):
@@ -387,7 +463,6 @@ def main():
 
     app = web.Application()
     
-    # Routes
     app.router.add_post('/create_invoice', create_invoice_api)
     app.router.add_options('/create_invoice', options_handler)
     
