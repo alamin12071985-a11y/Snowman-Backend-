@@ -1,3 +1,2 @@
 aiogram==3.10.0
-aiohttp
-APScheduler
+aiohttp==3.9.3
