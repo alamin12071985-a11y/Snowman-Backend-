@@ -11,28 +11,35 @@ from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_applicati
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.exceptions import TelegramBadRequest
+from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
 
 # --- LOGGING SETUP ---
-logging.basicConfig(level=logging.INFO, stream=sys.stdout)
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s",
+    stream=sys.stdout
+)
 
 # --- CONFIGURATION (ENV VARS) ---
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 APP_URL = os.getenv("APP_URL")
 
 # --- ADMIN CONFIGURATION ---
+# Replace with your actual Admin ID
 ADMIN_ID = 7605281774  
 CHANNEL_USERNAME = "@snowmanadventureannouncement" 
 GROUP_USERNAME = "@snowmanadventuregroup" 
 
-# Validation
+# --- VALIDATION ---
 if not BOT_TOKEN:
-    logging.error("❌ CRITICAL ERROR: BOT_TOKEN is missing!")
+    logging.error("❌ CRITICAL ERROR: BOT_TOKEN is missing in Environment Variables!")
     sys.exit(1)
 if not APP_URL:
-    logging.error("❌ CRITICAL ERROR: APP_URL is missing!")
+    logging.error("❌ CRITICAL ERROR: APP_URL is missing in Environment Variables!")
     sys.exit(1)
 
+# Ensure APP_URL does not end with a slash for consistency
+APP_URL = APP_URL.rstrip("/")
 WEBHOOK_PATH = "/webhook"
 WEBHOOK_URL = f"{APP_URL}{WEBHOOK_PATH}"
 
@@ -40,21 +47,34 @@ WEBHOOK_URL = f"{APP_URL}{WEBHOOK_PATH}"
 DB_FILE = "users.json"
 
 def load_users():
+    """Loads users from JSON file safely."""
     if not os.path.exists(DB_FILE):
         return set()
     try:
         with open(DB_FILE, "r") as f:
-            return set(json.load(f))
-    except:
+            content = f.read()
+            if not content: return set()
+            return set(json.loads(content))
+    except json.JSONDecodeError:
+        logging.warning("⚠️ Database file corrupted or empty. Starting fresh.")
+        return set()
+    except Exception as e:
+        logging.error(f"⚠️ Error loading database: {e}")
         return set()
 
 def save_user(user_id):
-    users = load_users()
-    if user_id not in users:
-        users.add(user_id)
-        with open(DB_FILE, "w") as f:
-            json.dump(list(users), f)
+    """Saves a user ID to the JSON file."""
+    try:
+        users = load_users()
+        if user_id not in users:
+            users.add(user_id)
+            with open(DB_FILE, "w") as f:
+                json.dump(list(users), f)
+            logging.info(f"🆕 New user saved: {user_id}")
+    except Exception as e:
+        logging.error(f"❌ Error saving user: {e}")
 
+# Load initially to memory
 users_db = load_users()
 
 # --- SHOP ITEMS (Stars XTR) ---
@@ -88,9 +108,8 @@ dp.include_router(router)
 
 # --- KEYBOARDS ---
 def get_main_keyboard():
-    # Update your bot username correctly in the URL if needed
     kb = [
-        [InlineKeyboardButton(text="❄️ Play Game ☃️", url="https://t.me/snowmanadventurebot/app?startapp=7605281774")],
+        [InlineKeyboardButton(text="❄️ Play Game ☃️", url=f"https://t.me/snowmanadventurebot/app")],
         [
             InlineKeyboardButton(text="📢 Channel", url=f"https://t.me/{CHANNEL_USERNAME.replace('@', '')}"),
             InlineKeyboardButton(text="💬 Group", url=f"https://t.me/{GROUP_USERNAME.replace('@', '')}")
@@ -144,72 +163,37 @@ def parse_buttons(button_text):
     except:
         return None
 
-# --- HANDLERS ---
+# --- TELEGRAM HANDLERS ---
 
 @router.message(Command("start"))
 async def cmd_start(message: types.Message):
     user_id = message.from_user.id
     save_user(user_id)
-    users_db.add(user_id)
     
     first_name = message.from_user.first_name
     
-    # New Start Message
     text = f"""
-❄️☃️ Hey {first_name}, Welcome to Snowman Adventure! ☃️❄️
+❄️☃️ <b>Hey {first_name}, Welcome to Snowman Adventure!</b> ☃️❄️
 
-Brrrr… the snow is falling and your journey starts RIGHT NOW! 🌨️✨
+Brrrr… the snow is falling and your journey starts <b>RIGHT NOW!</b> 🌨️✨
 
 Tap the Snowman, earn shiny coins 💰, level up 🚀 and unlock cool rewards 🎁
 
-Here’s what’s waiting for you 👇
+<b>Here’s what’s waiting for you:</b>
 ➡️ Tap & earn coins ❄️
 ➡️ Complete daily tasks 🔑
 ➡️ Spin & win surprises 🎡
 ➡️ Invite friends and earn MORE 💫
-➡️ Climb the leaderboard 🏆
-
-Every tap matters.
-Every coin counts.
-And you are now part of the Snowman family 🤍☃️
 
 So don’t wait…
-👉 Start tapping, start winning, and enjoy the adventure! 🎮❄️
+👉 Start tapping, start winning! 🎮❄️
     """
-    await message.answer(text, reply_markup=get_main_keyboard())
+    await message.answer(text, reply_markup=get_main_keyboard(), parse_mode="HTML")
 
-# Handler for generic text (Reply Message)
 @router.message(F.text & ~F.text.startswith("/"))
 async def echo_all(message: types.Message):
-    user_id = message.from_user.id
-    save_user(user_id)
-    users_db.add(user_id)
-    
-    first_name = message.from_user.first_name
-    
-    # New Reply Message
-    text = f"""
-❄️☃️ Hey {first_name}, Welcome Back to Snowman Adventure! ☃️❄️
-
-Snowman heard you typing… and got excited! 😄💫
-That means it’s time to jump back into the icy fun ❄️🎮
-
-What’s waiting for you right now 👇
-➡️ Tap the Snowman & earn coins 💰
-➡️ Complete tasks for instant rewards 🎯
-➡️ Spin and win surprises 🎡
-➡️ Invite friends & grow faster 👥
-➡️ Chase the top of the leaderboard 🏆
-
-Every click brings progress.
-Every moment brings rewards. 🌟
-
-Choose your next move below and keep the adventure going ⬇️
-
-❄️ Stay cool. Keep tapping.
-Snowman Adventure never sleeps! ☃️🔥
-    """
-    await message.answer(text, reply_markup=get_main_keyboard())
+    """Responds to generic text messages."""
+    await cmd_start(message)
 
 # --- BROADCAST HANDLERS ---
 
@@ -271,22 +255,27 @@ async def cb_send_broadcast(call: CallbackQuery, state: FSMContext):
 
     await call.message.edit_text("⏳ Sending broadcast... This may take time.")
     markup = parse_buttons(buttons_raw)
+    
+    # Reload users from DB to get latest
+    current_users = load_users()
+    
     count = 0
     blocked = 0
-    users_list = list(users_db)
-
-    for user_id in users_list:
+    
+    for user_id in current_users:
         try:
             if media_id:
                 await bot.send_photo(chat_id=user_id, photo=media_id, caption=text, reply_markup=markup)
             else:
                 await bot.send_message(chat_id=user_id, text=text, reply_markup=markup)
             count += 1
-            await asyncio.sleep(0.05) 
-        except Exception:
+            await asyncio.sleep(0.04) # Avoid hitting limits
+        except TelegramForbiddenError:
             blocked += 1
+        except Exception as e:
+            logging.error(f"Broadcast error for {user_id}: {e}")
     
-    await call.message.answer(f"✅ Broadcast Complete!\n\n👥 Sent: {count}\n🚫 Failed: {blocked}")
+    await call.message.answer(f"✅ Broadcast Complete!\n\n👥 Sent: {count}\n🚫 Blocked/Failed: {blocked}")
     await state.clear()
 
 @router.message(StateFilter(BroadcastState.waiting_for_media), F.photo)
@@ -323,7 +312,7 @@ async def on_pre_checkout(pre_checkout_query: types.PreCheckoutQuery):
 async def on_successful_payment(message: types.Message):
     await message.answer("✅ Payment Successful! Item added.")
 
-# --- WEBHOOK ---
+# --- LIFECYCLE ---
 async def on_startup(bot: Bot):
     logging.info(f"🔗 Setting webhook to: {WEBHOOK_URL}")
     await bot.set_webhook(WEBHOOK_URL)
@@ -332,7 +321,7 @@ async def on_shutdown(bot: Bot):
     logging.info("🔌 Deleting webhook...")
     await bot.delete_webhook()
 
-# --- CORS HELPER ---
+# --- API HELPERS (CORS) ---
 def cors_response(data, status=200):
     return web.json_response(
         data,
@@ -340,17 +329,20 @@ def cors_response(data, status=200):
         headers={
             "Access-Control-Allow-Origin": "*",
             "Access-Control-Allow-Methods": "POST, GET, OPTIONS",
-            "Access-Control-Allow-Headers": "Content-Type, Authorization"
+            "Access-Control-Allow-Headers": "Content-Type, Authorization",
+            "Access-Control-Max-Age": "86400"
         }
     )
 
 async def options_handler(request):
+    """Handles Preflight CORS requests."""
     return web.Response(
         status=200,
         headers={
             "Access-Control-Allow-Origin": "*",
             "Access-Control-Allow-Methods": "POST, GET, OPTIONS",
-            "Access-Control-Allow-Headers": "Content-Type, Authorization"
+            "Access-Control-Allow-Headers": "Content-Type, Authorization",
+            "Access-Control-Max-Age": "86400"
         }
     )
 
@@ -362,17 +354,21 @@ async def create_invoice_api(request):
         item_id = data.get('item_id')
         user_id = data.get('user_id')
 
+        if not item_id or not user_id:
+            return cors_response({"error": "Missing item_id or user_id"}, status=400)
+
         if item_id not in SHOP_ITEMS:
             return cors_response({"error": "Item not found"}, status=404)
 
         item = SHOP_ITEMS[item_id]
         prices = [LabeledPrice(label=item_id, amount=item['price'])]
         
+        # Telegram Stars Invoice
         link = await bot.create_invoice_link(
             title="Snowman Shop",
             description=f"Purchase {item_id}",
             payload=f"{user_id}_{item_id}",
-            provider_token="", 
+            provider_token="", # Empty for Stars
             currency="XTR",
             prices=prices,
         )
@@ -383,7 +379,8 @@ async def create_invoice_api(request):
 
 async def verify_join_api(request):
     """
-    Checks if a user has joined the required Channel and Group with detailed logging.
+    Strictly checks if a user is in the required Channel and Group.
+    NOTE: The Bot MUST be an Admin in both the Channel and Group to check!
     """
     try:
         data = await request.json()
@@ -392,61 +389,40 @@ async def verify_join_api(request):
         if not user_id:
             return cors_response({"joined": False, "error": "No user ID"}, status=400)
 
-        # Ensure user_id is an integer
+        # Convert to int safely
         try:
             user_id = int(user_id)
         except ValueError:
-            return cors_response({"joined": False, "error": "Invalid User ID"})
+            return cors_response({"joined": False, "error": "Invalid User ID format"})
 
-        # Valid statuses including 'restricted'
+        # Valid statuses that count as 'joined'
         valid_statuses = ['member', 'administrator', 'creator', 'restricted']
 
-        # --- CHECK CHANNEL ---
-        channel_joined = False
-        try:
-            chat_member_ch = await bot.get_chat_member(chat_id=CHANNEL_USERNAME, user_id=user_id)
-            status_ch = chat_member_ch.status
-            logging.info(f"👤 User {user_id} Channel Status: {status_ch}") 
-            
-            if status_ch in valid_statuses:
-                channel_joined = True
-            elif status_ch == 'left':
-                logging.warning(f"❌ User {user_id} has LEFT the channel.")
-            elif status_ch == 'kicked':
-                logging.warning(f"🚫 User {user_id} is BANNED from channel.")
-                
-        except TelegramBadRequest as e:
-            logging.error(f"⚠️ Channel Check Failed (Bot Admin?): {e}")
-            channel_joined = False
-        except Exception as e:
-            logging.error(f"⚠️ Channel Error: {e}")
-            channel_joined = False
+        async def check_chat(chat_id):
+            try:
+                member = await bot.get_chat_member(chat_id=chat_id, user_id=user_id)
+                # Note: 'restricted' usually means they are in the chat but maybe muted.
+                # If they were banned, status would be 'kicked'.
+                return member.status in valid_statuses
+            except TelegramBadRequest as e:
+                # This usually means the Bot is not an Admin, or Chat doesn't exist
+                logging.error(f"⚠️ Check Failed for {chat_id}: {e}")
+                return False
+            except Exception as e:
+                logging.error(f"⚠️ Unexpected error checking {chat_id}: {e}")
+                return False
 
-        # --- CHECK GROUP ---
-        group_joined = False
-        try:
-            chat_member_gr = await bot.get_chat_member(chat_id=GROUP_USERNAME, user_id=user_id)
-            status_gr = chat_member_gr.status
-            logging.info(f"👤 User {user_id} Group Status: {status_gr}") 
-            
-            if status_gr in valid_statuses:
-                group_joined = True
-            elif status_gr == 'left':
-                logging.warning(f"❌ User {user_id} has LEFT the group.")
-                
-        except TelegramBadRequest as e:
-            logging.error(f"⚠️ Group Check Failed (Bot Admin?): {e}")
-            group_joined = False
-        except Exception as e:
-            logging.error(f"⚠️ Group Error: {e}")
-            group_joined = False
+        # Run checks in parallel for speed
+        channel_task = check_chat(CHANNEL_USERNAME)
+        group_task = check_chat(GROUP_USERNAME)
+        
+        is_in_channel, is_in_group = await asyncio.gather(channel_task, group_task)
 
-        # --- FINAL DECISION ---
-        if channel_joined and group_joined:
-            logging.info(f"✅ User {user_id} verified successfully!")
+        if is_in_channel and is_in_group:
+            logging.info(f"✅ User {user_id} verified successfully.")
             return cors_response({"joined": True})
         else:
-            logging.info(f"⛔ Verification Failed for {user_id}. Ch: {channel_joined}, Gr: {group_joined}")
+            logging.warning(f"⛔ Verification Failed for {user_id}. Channel: {is_in_channel}, Group: {is_in_group}")
             return cors_response({"joined": False})
             
     except Exception as e:
@@ -463,6 +439,7 @@ def main():
 
     app = web.Application()
     
+    # Define routes
     app.router.add_post('/create_invoice', create_invoice_api)
     app.router.add_options('/create_invoice', options_handler)
     
@@ -471,7 +448,11 @@ def main():
     
     app.router.add_get('/', home)
 
-    webhook_requests_handler = SimpleRequestHandler(dispatcher=dp, bot=bot)
+    # Webhook Handler
+    webhook_requests_handler = SimpleRequestHandler(
+        dispatcher=dp, 
+        bot=bot
+    )
     webhook_requests_handler.register(app, path=WEBHOOK_PATH)
     
     setup_application(app, dp, bot=bot)
