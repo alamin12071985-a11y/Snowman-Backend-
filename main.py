@@ -7,21 +7,21 @@ from aiohttp import web
 from aiogram import Bot, Dispatcher, Router, F, types
 from aiogram.filters import Command, StateFilter
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, LabeledPrice, CallbackQuery
-from aiogram.webhook.aiohttp_server import SimpleRequestHandler, TokenBasedRequestHandler
+from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
 
 # --- LOGGING SETUP ---
+# বিস্তারিত লগ দেখার জন্য DEBUG মোড চালু করা হলো
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(levelname)s - %(message)s",
     stream=sys.stdout
 )
 
-# --- CONFIGURATION (ENV VARS) ---
-# .env ফাইল অথবা Environment Variables থেকে এগুলো লোড হবে
+# --- CONFIGURATION ---
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 APP_URL = os.getenv("APP_URL")
 
@@ -31,23 +31,19 @@ CHANNEL_USERNAME = "@snowmanadventureannouncement"
 GROUP_USERNAME = "@snowmanadventuregroup" 
 
 # --- VALIDATION ---
-if not BOT_TOKEN:
-    logging.error("❌ CRITICAL ERROR: BOT_TOKEN is missing!")
-    sys.exit(1)
-if not APP_URL:
-    logging.error("❌ CRITICAL ERROR: APP_URL is missing!")
+if not BOT_TOKEN or not APP_URL:
+    logging.error("❌ CRITICAL ERROR: BOT_TOKEN or APP_URL is missing!")
     sys.exit(1)
 
-# URL Cleaning
 APP_URL = APP_URL.rstrip("/")
 WEBHOOK_PATH = "/webhook"
 WEBHOOK_URL = f"{APP_URL}{WEBHOOK_PATH}"
 
-# --- DATABASE (Simple JSON) ---
+# --- DATABASE (Safe JSON Handling) ---
 DB_FILE = "users.json"
 
 def load_users():
-    """Loads users from JSON file safely."""
+    """Loads users safely."""
     if not os.path.exists(DB_FILE):
         return set()
     try:
@@ -55,23 +51,32 @@ def load_users():
             content = f.read().strip()
             if not content: return set()
             return set(json.loads(content))
-    except (json.JSONDecodeError, Exception) as e:
-        logging.warning(f"⚠️ Database error: {e}. Starting fresh.")
+    except Exception as e:
+        logging.error(f"⚠️ DB Load Error: {e}")
         return set()
 
-def save_user(user_id):
-    """Saves a user ID to the JSON file."""
+async def save_user_async(user_id):
+    """Saves user asynchronously to prevent blocking."""
+    try:
+        # ব্লকিং এড়াতে লুপের মধ্যে এক্সিকিউটর ব্যবহার করা হলো
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, _save_user_sync, user_id)
+    except Exception as e:
+        logging.error(f"❌ Error saving user async: {e}")
+
+def _save_user_sync(user_id):
+    """Sync helper for saving user."""
     try:
         users = load_users()
         if user_id not in users:
             users.add(user_id)
             with open(DB_FILE, "w") as f:
                 json.dump(list(users), f)
-            logging.info(f"🆕 New user saved: {user_id}")
+            logging.info(f"🆕 New user saved to DB: {user_id}")
     except Exception as e:
-        logging.error(f"❌ Error saving user: {e}")
+        logging.error(f"❌ DB Write Error: {e}")
 
-# --- SHOP ITEMS (Stars XTR) ---
+# --- SHOP ITEMS ---
 SHOP_ITEMS = {
     'coin_starter': {'price': 10, 'amount': 100},
     'coin_small': {'price': 50, 'amount': 1},
@@ -94,7 +99,6 @@ class BroadcastState(StatesGroup):
     waiting_for_buttons = State()
 
 # --- BOT SETUP ---
-# গ্লোবাল ভেরিয়েবল হিসেবে বট এবং ডিসপ্যাচার ডিক্লেয়ার করা হলো
 bot = Bot(token=BOT_TOKEN)
 storage = MemoryStorage()
 dp = Dispatcher(storage=storage)
@@ -161,12 +165,14 @@ def parse_buttons(button_text):
 
 @router.message(Command("start"))
 async def cmd_start(message: types.Message):
+    # লগ প্রিন্ট করা হচ্ছে ডিবাগিং এর জন্য
+    logging.info(f"👉 Start Command Received from: {message.from_user.id}")
+    
     try:
-        user_id = message.from_user.id
-        save_user(user_id)
+        # ডাটাবেসে সেভ করা (Async) যাতে বটের স্পিড না কমে
+        await save_user_async(message.from_user.id)
         
         first_name = message.from_user.first_name
-        
         text = f"""
 ❄️☃️ <b>Hey {first_name}, Welcome to Snowman Adventure!</b> ☃️❄️
 
@@ -185,7 +191,7 @@ So don’t wait…
         """
         await message.answer(text, reply_markup=get_main_keyboard(), parse_mode="HTML")
     except Exception as e:
-        logging.error(f"Error in start command: {e}")
+        logging.error(f"❌ Error inside cmd_start: {e}")
 
 @router.message(F.text & ~F.text.startswith("/"))
 async def echo_all(message: types.Message):
@@ -334,22 +340,20 @@ async def create_invoice_api(request):
         data = await request.json()
         item_id = data.get('item_id')
         user_id = data.get('user_id')
-
         if not item_id or not user_id:
-            return cors_response({"error": "Missing item_id or user_id"}, status=400)
-        if item_id not in SHOP_ITEMS:
+            return cors_response({"error": "Missing params"}, status=400)
+        
+        item = SHOP_ITEMS.get(item_id)
+        if not item:
             return cors_response({"error": "Item not found"}, status=404)
 
-        item = SHOP_ITEMS[item_id]
-        prices = [LabeledPrice(label=item_id, amount=item['price'])]
-        
         link = await bot.create_invoice_link(
             title="Snowman Shop",
             description=f"Purchase {item_id}",
             payload=f"{user_id}_{item_id}",
             provider_token="", 
             currency="XTR",
-            prices=prices,
+            prices=[LabeledPrice(label=item_id, amount=item['price'])],
         )
         return cors_response({"result": link})
     except Exception as e:
@@ -360,81 +364,59 @@ async def verify_join_api(request):
     try:
         data = await request.json()
         user_id = data.get('user_id')
+        if not user_id: return cors_response({"joined": False}, status=400)
         
-        if not user_id:
-            return cors_response({"joined": False, "error": "No user ID"}, status=400)
-        try:
-            user_id = int(user_id)
-        except ValueError:
-            return cors_response({"joined": False, "error": "Invalid User ID format"})
-
+        user_id = int(user_id)
         valid_statuses = ['member', 'administrator', 'creator', 'restricted']
 
-        async def check_chat(chat_id):
+        async def check(chat_id):
             try:
-                member = await bot.get_chat_member(chat_id=chat_id, user_id=user_id)
-                return member.status in valid_statuses
-            except TelegramBadRequest:
-                return False
-            except Exception as e:
-                logging.error(f"Check error {chat_id}: {e}")
-                return False
+                m = await bot.get_chat_member(chat_id, user_id)
+                return m.status in valid_statuses
+            except: return False
 
-        is_in_channel, is_in_group = await asyncio.gather(
-            check_chat(CHANNEL_USERNAME),
-            check_chat(GROUP_USERNAME)
-        )
-
-        return cors_response({"joined": (is_in_channel and is_in_group)})
+        in_channel, in_group = await asyncio.gather(check(CHANNEL_USERNAME), check(GROUP_USERNAME))
+        return cors_response({"joined": (in_channel and in_group)})
     except Exception as e:
         return cors_response({"error": str(e)}, status=500)
 
 async def home(request):
-    return web.Response(text="⛄ Snowman Adventure Backend is Running! ❄️")
+    return web.Response(text="⛄ Bot Running... Waiting for updates.")
 
 # --- LIFECYCLE (WEBHOOK SETUP) ---
 async def on_startup(app):
     logging.info(f"🔗 Setting webhook to: {WEBHOOK_URL}")
     try:
+        # drop_pending_updates=False করা হয়েছে যেন পুরানো মেসেজ মিস না হয়
         await bot.set_webhook(
             WEBHOOK_URL,
-            drop_pending_updates=True, # Optional: পুরানো আপডেট ক্লিয়ার করার জন্য
+            drop_pending_updates=False, 
             allowed_updates=["message", "callback_query", "pre_checkout_query"]
         )
-        info = await bot.get_webhook_info()
-        logging.info(f"✅ Webhook Set Successfully! URL: {info.url}")
+        logging.info("✅ Webhook Set Successfully!")
     except Exception as e:
         logging.error(f"❌ Failed to set webhook: {e}")
 
 async def on_shutdown(app):
-    logging.info("🔌 Shutting down...")
     await bot.delete_webhook()
     await bot.session.close()
 
 # --- MAIN EXECUTION ---
 def main():
     app = web.Application()
-    
-    # 1. Register Startup/Shutdown Handlers
     app.on_startup.append(on_startup)
     app.on_shutdown.append(on_shutdown)
 
-    # 2. Add API Routes
     app.router.add_get('/', home)
     app.router.add_post('/create_invoice', create_invoice_api)
     app.router.add_options('/create_invoice', options_handler)
     app.router.add_post('/verify_join', verify_join_api)
     app.router.add_options('/verify_join', options_handler)
 
-    # 3. Add Webhook Handler (Correct Way for Aiogram 3)
-    webhook_requests_handler = SimpleRequestHandler(
-        dispatcher=dp,
-        bot=bot
-    )
-    # এখানে POST মেথড হতে হবে
+    # Webhook Handler
+    webhook_requests_handler = SimpleRequestHandler(dispatcher=dp, bot=bot)
     app.router.add_post(WEBHOOK_PATH, webhook_requests_handler)
 
-    # 4. Run App
     port = int(os.getenv("PORT", 10000))
     web.run_app(app, host="0.0.0.0", port=port)
 
