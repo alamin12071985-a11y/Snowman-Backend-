@@ -3,6 +3,7 @@ import sys
 import logging
 import asyncio
 import json
+import random
 from aiohttp import web
 from aiogram import Bot, Dispatcher, Router, F, types
 from aiogram.filters import Command, StateFilter
@@ -81,6 +82,18 @@ SHOP_ITEMS = {
     'autotap_7d': {'price': 80, 'amount': 1},
     'autotap_30d': {'price': 200, 'amount': 1},
 }
+
+# --- NEW: SPIN PRIZES CONFIGURATION ---
+SPIN_PRIZES = [
+    0.00000048, 
+    0.00000060,
+    0.00000080, 
+    0.00000100,
+    0.00000050, 
+    0.00000030,
+    0.00000020, 
+    0.00000150
+]
 
 # --- 4. STATES & BOT INIT ---
 class BroadcastState(StatesGroup):
@@ -402,20 +415,18 @@ async def create_invoice_api(request):
         logging.error(f"Invoice API Error: {e}")
         return cors_response({"error": str(e)}, status=500)
 
-# -- NEW: Ad Verification API (Support Adsgram) --
+# -- UPDATED: Ad Verification API --
 async def verify_ad_api(request):
     try:
         data = await request.json()
         user_id = data.get('user_id')
-        ad_type = data.get('type')
+        # New parameter for provider tracking (Adsgram vs GigaPub)
+        provider = data.get('provider', 'unknown') 
 
         if not user_id:
             return cors_response({"success": False, "error": "Missing user_id"}, status=400)
         
-        # In a real-world scenario, you might verify a signature from Adsgram here
-        # or implement rate limiting to ensure users don't spam ads API.
-        
-        logging.info(f"📺 Ad watched by user {user_id} (Type: {ad_type})")
+        logging.info(f"📺 Ad watched by user {user_id} via provider: {provider}")
         
         # Here you could extend logic to increment specific counters in a database if needed.
         # For now, we simply confirm success so frontend can process rewards.
@@ -425,6 +436,49 @@ async def verify_ad_api(request):
     except Exception as e:
         logging.error(f"Ad Verify API Error: {e}")
         return cors_response({"success": False, "error": str(e)}, status=500)
+
+# -- NEW: Play Spin API (Server-side Logic) --
+async def play_spin_api(request):
+    try:
+        data = await request.json()
+        user_id = data.get('user_id')
+        
+        if not user_id:
+            return cors_response({"success": False, "error": "Missing user_id"}, status=400)
+            
+        # Determine prize server-side to prevent cheating
+        # Random index 0-7
+        idx = random.randint(0, len(SPIN_PRIZES) - 1)
+        amount = SPIN_PRIZES[idx]
+        
+        logging.info(f"🎰 User {user_id} spun: Index {idx}, Amount {amount}")
+        
+        return cors_response({
+            "success": True,
+            "index": idx,
+            "amount": amount
+        })
+    except Exception as e:
+        logging.error(f"Spin API Error: {e}")
+        return cors_response({"success": False}, status=500)
+
+# -- NEW: Complete Task API --
+async def complete_task_api(request):
+    try:
+        data = await request.json()
+        user_id = data.get('user_id')
+        task_id = data.get('task_id')
+        
+        if not user_id or not task_id:
+            return cors_response({"success": False}, status=400)
+            
+        logging.info(f"✅ User {user_id} completed task {task_id}")
+        # Here you could check database to see if task was already done
+        
+        return cors_response({"success": True})
+    except Exception as e:
+        logging.error(f"Task API Error: {e}")
+        return cors_response({"success": False}, status=500)
 
 async def home_handler(request):
     return web.Response(text="☃️ Snowman Adventure Backend Running... ❄️")
@@ -459,9 +513,16 @@ def main():
     app.router.add_post('/create_invoice', create_invoice_api)
     app.router.add_options('/create_invoice', options_handler)
     
-    # New Ad Route
+    # Ad Route (Updated)
     app.router.add_post('/verify-ad', verify_ad_api)
     app.router.add_options('/verify-ad', options_handler)
+    
+    # New Routes
+    app.router.add_post('/play-spin', play_spin_api)
+    app.router.add_options('/play-spin', options_handler)
+    
+    app.router.add_post('/complete-task', complete_task_api)
+    app.router.add_options('/complete-task', options_handler)
     
     app.router.add_get('/', home_handler)
 
