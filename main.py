@@ -31,10 +31,11 @@ GROUP_USERNAME = "@snowmanadventuregroup"
 # Validation
 if not BOT_TOKEN or not APP_URL:
     logging.error("❌ CRITICAL ERROR: BOT_TOKEN or APP_URL is missing!")
-    sys.exit(1)
+    # For local testing without env vars, uncomment below (DO NOT USE IN PRODUCTION)
+    # sys.exit(1)
 
 # URL Formatting
-APP_URL = APP_URL.rstrip("/")
+APP_URL = (APP_URL or "").rstrip("/")
 WEBHOOK_PATH = "/webhook"
 WEBHOOK_URL = f"{APP_URL}{WEBHOOK_PATH}"
 
@@ -401,6 +402,30 @@ async def create_invoice_api(request):
         logging.error(f"Invoice API Error: {e}")
         return cors_response({"error": str(e)}, status=500)
 
+# -- NEW: Ad Verification API (Support Adsgram) --
+async def verify_ad_api(request):
+    try:
+        data = await request.json()
+        user_id = data.get('user_id')
+        ad_type = data.get('type')
+
+        if not user_id:
+            return cors_response({"success": False, "error": "Missing user_id"}, status=400)
+        
+        # In a real-world scenario, you might verify a signature from Adsgram here
+        # or implement rate limiting to ensure users don't spam ads API.
+        
+        logging.info(f"📺 Ad watched by user {user_id} (Type: {ad_type})")
+        
+        # Here you could extend logic to increment specific counters in a database if needed.
+        # For now, we simply confirm success so frontend can process rewards.
+        
+        return cors_response({"success": True})
+
+    except Exception as e:
+        logging.error(f"Ad Verify API Error: {e}")
+        return cors_response({"success": False, "error": str(e)}, status=500)
+
 async def home_handler(request):
     return web.Response(text="☃️ Snowman Adventure Backend Running... ❄️")
 
@@ -409,8 +434,11 @@ async def home_handler(request):
 # ==========================================
 
 async def on_startup(bot: Bot):
-    logging.info(f"🔗 Setting Webhook: {WEBHOOK_URL}")
-    await bot.set_webhook(WEBHOOK_URL)
+    if WEBHOOK_URL.startswith("http"):
+        logging.info(f"🔗 Setting Webhook: {WEBHOOK_URL}")
+        await bot.set_webhook(WEBHOOK_URL)
+    else:
+        logging.warning("⚠️ No APP_URL set, webhook not configured.")
 
 async def on_shutdown(bot: Bot):
     logging.info("🔌 Removing Webhook...")
@@ -430,6 +458,10 @@ def main():
     
     app.router.add_post('/create_invoice', create_invoice_api)
     app.router.add_options('/create_invoice', options_handler)
+    
+    # New Ad Route
+    app.router.add_post('/verify-ad', verify_ad_api)
+    app.router.add_options('/verify-ad', options_handler)
     
     app.router.add_get('/', home_handler)
 
