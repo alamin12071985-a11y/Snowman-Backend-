@@ -5,15 +5,12 @@ import asyncio
 import json
 import random
 import time
-import hmac
-import hashlib
 from datetime import datetime
 
-# ==============================================================================
-#  LIBRARIES
-# ==============================================================================
-# pip install aiohttp aiogram
+# Aiohttp for Web Server
 from aiohttp import web
+
+# Aiogram for Telegram Bot Interaction
 from aiogram import Bot, Dispatcher, Router, F, types
 from aiogram.filters import Command, StateFilter, CommandStart, CommandObject
 from aiogram.types import (
@@ -25,9 +22,7 @@ from aiogram.types import (
     Message,
     FSInputFile,
     ContentType,
-    BotCommand,
-    InputMediaPhoto,
-    InputMediaVideo
+    BotCommand
 )
 from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
 from aiogram.fsm.context import FSMContext
@@ -41,11 +36,11 @@ from aiogram.exceptions import (
 )
 
 # ==============================================================================
-#  SECTION 1: CONFIGURATION & LOGGING
+#  SECTION 1: CONFIGURATION & LOGGING SETUP
 # ==============================================================================
 
-# 1.1 Configure Logging
-# Detailed logging helps you track every action and error
+# 1.1 Configure Detailed Logging
+# This helps in debugging exactly what happens in the server
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - [%(levelname)s] - %(name)s - %(message)s",
@@ -54,18 +49,18 @@ logging.basicConfig(
 logger = logging.getLogger("SnowmanBackend")
 
 # 1.2 Load Environment Variables
-# These must be set in your Render/Heroku environment
+# These must be set in your hosting environment (e.g., Render, Heroku, VPS)
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 APP_URL = os.getenv("APP_URL")
 PORT = int(os.getenv("PORT", 10000))
 
 # 1.3 Admin & Community Configuration
-# Replace with your actual Admin ID
+# Replace these with your actual IDs
 ADMIN_ID = 7605281774  
 CHANNEL_USERNAME = "@snowmanadventureannouncement" 
 GROUP_USERNAME = "@snowmanadventuregroup" 
 
-# 1.4 Security Checks
+# 1.4 Critical Security Check
 if not BOT_TOKEN:
     logger.critical("❌ CRITICAL ERROR: 'BOT_TOKEN' is missing in Environment Variables!")
     sys.exit(1)
@@ -74,27 +69,24 @@ if not APP_URL:
     logger.critical("❌ CRITICAL ERROR: 'APP_URL' is missing in Environment Variables!")
     sys.exit(1)
 
-# 1.5 Webhook Configuration
+# 1.5 Webhook URL Configuration
+# Remove trailing slash to prevent double slashes (e.g., .com//webhook)
 APP_URL = str(APP_URL).rstrip("/")
 WEBHOOK_PATH = "/webhook"
 WEBHOOK_URL = f"{APP_URL}{WEBHOOK_PATH}"
 
-logger.info(f"⚙️ Configuration Loaded.")
-logger.info(f"🔗 Webhook URL: {WEBHOOK_URL}")
-logger.info(f"👑 Admin ID: {ADMIN_ID}")
+logger.info(f"⚙️ Configuration Loaded. Webhook URL: {WEBHOOK_URL}")
 
 # ==============================================================================
 #  SECTION 2: DATABASE MANAGEMENT (JSON)
 # ==============================================================================
-# This database stores User IDs for the BOT (Broadcasting).
-# Game data (Coins, Level) is stored in Firebase via Frontend.
 
 DB_FILE = "users.json"
 
 class DatabaseManager:
     """
-    Manages user data storage using a persistent JSON file.
-    Includes atomic-like operations to prevent data corruption.
+    Manages user data storage using a simple JSON file.
+    Includes methods to load, save, and count users.
     """
     
     @staticmethod
@@ -121,13 +113,14 @@ class DatabaseManager:
                 if not content:
                     return set()
                 data = json.loads(content)
+                # Ensure data is a list before converting to set
                 if isinstance(data, list):
                     return set(data)
                 else:
-                    logger.warning("⚠️ Database format invalid. Resetting.")
+                    logger.warning("⚠️ Database format invalid. Expected a list.")
                     return set()
         except json.JSONDecodeError:
-            logger.error("⚠️ JSON Decode Error.")
+            logger.error("⚠️ JSON Decode Error. Database might be empty or corrupted.")
             return set()
         except Exception as e:
             logger.error(f"⚠️ Database Load Error: {e}")
@@ -137,6 +130,7 @@ class DatabaseManager:
     def save_user(user_id):
         """
         Adds a user ID to the database if not already present.
+        Uses atomic-like logic by reading, updating, and writing back.
         """
         try:
             user_id = int(user_id)
@@ -146,8 +140,10 @@ class DatabaseManager:
                 users.add(user_id)
                 with open(DB_FILE, "w") as f:
                     json.dump(list(users), f)
-                logger.info(f"🆕 New User Registered: {user_id}. Total: {len(users)}")
-            
+                logger.info(f"🆕 User Added to DB: {user_id}. Total Users: {len(users)}")
+            else:
+                # User already exists, verbose logging usually not needed here to save logs
+                pass
         except Exception as e:
             logger.error(f"❌ Failed to save user {user_id}: {e}")
 
@@ -157,52 +153,46 @@ class DatabaseManager:
         users = DatabaseManager.load_users()
         return len(users)
 
-    @staticmethod
-    def get_all_users_list():
-        """Returns list of all users for broadcasting."""
-        return list(DatabaseManager.load_users())
-
 # Initialize DB on startup
 DatabaseManager._initialize_db()
 
 # ==============================================================================
-#  SECTION 3: GAME CONFIGURATION (SHOP & SPIN)
+#  SECTION 3: GAME CONFIGURATION (SHOP, PRIZES)
 # ==============================================================================
 
 # 3.1 Telegram Stars Shop Items
-# These IDs correspond to the frontend Shop IDs.
-# Prices are in Telegram Stars (XTR).
+# These keys must match what the frontend sends in 'item_id'
 SHOP_ITEMS = {
     # --- Coin Packs ---
     'coin_starter': {
         'price': 10, 
         'amount': 5000, 
         'title': 'Starter Pack (5k Coins)',
-        'desc': 'Instantly add 5,000 Snow Coins to your balance.'
+        'desc': 'Get a quick start with 5,000 Coins!'
     },
     'coin_small': {
-        'price': 20, 
-        'amount': 10000, 
-        'title': 'Small Pack (10k Coins)',
-        'desc': 'Instantly add 10,000 Snow Coins to your balance.'
+        'price': 50, 
+        'amount': 30000, 
+        'title': 'Small Pack (30k Coins)',
+        'desc': 'A nice boost of 30,000 Coins.'
     },
     'coin_medium': {
-        'price': 60, 
-        'amount': 40000, 
-        'title': 'Medium Pack (40k Coins)',
-        'desc': 'Instantly add 40,000 Snow Coins to your balance.'
+        'price': 100, 
+        'amount': 70000, 
+        'title': 'Medium Pack (70k Coins)',
+        'desc': 'Serious players need this. 70,000 Coins.'
     },
     'coin_large': {
-        'price': 120, 
-        'amount': 100000, 
-        'title': 'Large Pack (100k Coins)',
-        'desc': 'Instantly add 100,000 Snow Coins to your balance.'
+        'price': 250, 
+        'amount': 200000, 
+        'title': 'Large Pack (200k Coins)',
+        'desc': 'Huge amount! 200,000 Coins.'
     },
     'coin_mega': {
-        'price': 220, 
-        'amount': 220000, 
-        'title': 'Mega Pack (220k Coins)',
-        'desc': 'The ultimate pack! 220,000 Coins.'
+        'price': 500, 
+        'amount': 500000, 
+        'title': 'Mega Pack (500k Coins)',
+        'desc': 'Ultimate power! 500,000 Coins.'
     },
     
     # --- Boosters ---
@@ -210,19 +200,19 @@ SHOP_ITEMS = {
         'price': 20, 
         'amount': 1, 
         'title': '3 Days Booster (x2)',
-        'desc': 'Doubles your tapping power for 3 days.'
+        'desc': 'Double your tapping power for 3 days.'
     },
     'booster_15d': {
         'price': 70, 
         'amount': 1, 
         'title': '15 Days Booster (x2)',
-        'desc': 'Doubles your tapping power for 15 days.'
+        'desc': 'Double your tapping power for 15 days.'
     },
     'booster_30d': {
         'price': 120, 
         'amount': 1, 
         'title': '30 Days Booster (x2)',
-        'desc': 'Doubles your tapping power for 30 days.'
+        'desc': 'Double your tapping power for 30 days.'
     },
     
     # --- Auto Tap ---
@@ -247,7 +237,7 @@ SHOP_ITEMS = {
 }
 
 # 3.2 Spin Game Prizes
-# These are the actual values determined by the server.
+# These are the TON amounts a user can win
 SPIN_PRIZES = [
     0.00000048, 
     0.00000060,
@@ -260,26 +250,22 @@ SPIN_PRIZES = [
 ]
 
 # ==============================================================================
-#  SECTION 4: BOT INITIALIZATION
+#  SECTION 4: BOT SETUP & STATE MACHINES
 # ==============================================================================
 
-# Memory Storage for Finite State Machine (FSM)
+# 4.1 Memory Storage for FSM
 storage = MemoryStorage()
 
-# Initialize Bot and Dispatcher
+# 4.2 Initialize Bot and Dispatcher
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher(storage=storage)
 router = Router()
 dp.include_router(router)
 
-# ==============================================================================
-#  SECTION 5: FSM STATES (ADMIN WIZARD)
-# ==============================================================================
-
+# 4.3 Define States for Broadcast Wizard
 class BroadcastState(StatesGroup):
     """
     States used for the Admin Broadcast Wizard.
-    Allows admins to send text, photo, or video messages with buttons.
     """
     menu = State()               # Initial menu selection
     waiting_for_media = State()  # Waiting for photo/video
@@ -288,11 +274,11 @@ class BroadcastState(StatesGroup):
     confirm_send = State()       # Final confirmation before sending
 
 # ==============================================================================
-#  SECTION 6: KEYBOARDS & HELPERS
+#  SECTION 5: KEYBOARDS & UI HELPERS
 # ==============================================================================
 
 def get_main_keyboard():
-    """Main Menu Keyboard for Users"""
+    """Returns the main menu keyboard shown on /start."""
     return InlineKeyboardMarkup(inline_keyboard=[
         [
             InlineKeyboardButton(
@@ -313,15 +299,14 @@ def get_main_keyboard():
     ])
 
 def get_admin_keyboard():
-    """Admin Panel Keyboard"""
+    """Returns keyboard for /admin command."""
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="📢 Create Broadcast", callback_data="admin_broadcast")],
-        [InlineKeyboardButton(text="📊 View User Stats", callback_data="admin_stats")],
-        [InlineKeyboardButton(text="❌ Close Panel", callback_data="admin_close")]
+        [InlineKeyboardButton(text="📊 View Stats", callback_data="admin_stats")]
     ])
 
 def get_broadcast_start_kb():
-    """Step 1: Choose Broadcast Type"""
+    """Step 1 of Broadcast: Choose type."""
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🖼️ Image/Video + Text", callback_data="br_start_media")],
         [InlineKeyboardButton(text="📝 Text Message Only", callback_data="br_start_text")],
@@ -329,14 +314,14 @@ def get_broadcast_start_kb():
     ])
 
 def get_nav_buttons(next_callback, back_callback):
-    """Generic Navigation Buttons"""
+    """Generic Next/Back buttons for wizards."""
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="➡️ Next Step", callback_data=next_callback)],
         [InlineKeyboardButton(text="🔙 Go Back", callback_data=back_callback)]
     ])
 
 def get_final_confirm_kb():
-    """Final Confirmation"""
+    """Final confirmation before blasting messages."""
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🚀 CONFIRM & SEND", callback_data="br_final_send")],
         [InlineKeyboardButton(text="❌ Cancel Everything", callback_data="br_cancel")]
@@ -345,28 +330,22 @@ def get_final_confirm_kb():
 def parse_buttons_text(text):
     """
     Parses a string input into an InlineKeyboardMarkup.
-    Format: "Button Text - URL" (one per line).
-    (Fixed for robustness)
+    Expected format: "Button Text - URL" (one per line).
     """
-    if not text or text.lower() == 'skip': 
+    if not text: 
         return None
     try:
         kb_rows = []
         lines = text.split('\n')
         for line in lines:
             line = line.strip()
-            # Support both "Text - Link" and "Text-Link"
             if '-' in line:
                 parts = line.split('-', 1)
                 btn_text = parts[0].strip()
                 btn_url = parts[1].strip()
                 
-                # Check for protocol and fix it if missing
-                if not btn_url.startswith(('http://', 'https://')):
-                    btn_url = 'https://' + btn_url
-                
                 # Basic validation
-                if btn_text and btn_url:
+                if btn_text and btn_url.startswith('http'):
                     kb_rows.append([InlineKeyboardButton(text=btn_text, url=btn_url)])
         
         if not kb_rows:
@@ -378,14 +357,14 @@ def parse_buttons_text(text):
         return None
 
 # ==============================================================================
-#  SECTION 7: BOT COMMAND HANDLERS
+#  SECTION 6: BOT COMMAND HANDLERS
 # ==============================================================================
 
 @router.message(CommandStart())
 async def cmd_start(message: types.Message, command: CommandObject):
     """
-    Handles /start command.
-    Registers user and shows welcome message.
+    Handles the /start command.
+    Checks for referral parameters and welcomes the user.
     """
     user_id = message.from_user.id
     first_name = message.from_user.first_name
@@ -393,10 +372,12 @@ async def cmd_start(message: types.Message, command: CommandObject):
     # Save User to DB
     DatabaseManager.save_user(user_id)
     
-    # Handle Referral Logic (Logging mostly, actual reward is frontend/backend sync)
+    # Handle Referral Logic
     referral_source = command.args
     if referral_source:
         logger.info(f"🔗 User {user_id} was referred by ID: {referral_source}")
+        # Note: Actual reward logic is usually handled in the Frontend 
+        # using Telegram.WebApp.initData to ensure security.
     
     welcome_msg = (
         f"❄️☃️ <b>Hello, {first_name}!</b> ☃️❄️\n\n"
@@ -426,7 +407,7 @@ async def cmd_help(message: types.Message):
     await message.answer(help_text, parse_mode="HTML")
 
 # ==============================================================================
-#  SECTION 8: ADMIN CONTROL PANEL
+#  SECTION 7: ADMIN SYSTEM & BROADCAST WIZARD
 # ==============================================================================
 
 @router.message(Command("admin"))
@@ -436,66 +417,48 @@ async def cmd_admin(message: types.Message):
     Restricted to ADMIN_ID.
     """
     if message.from_user.id != ADMIN_ID:
-        # Silently ignore unauthorized access
+        # Silently ignore or send fake message
         return
     
     total_users = DatabaseManager.get_total_users()
     
     text = (
         "🔐 <b>Admin Control Panel</b>\n\n"
-        f"👤 Total Users in DB: <code>{total_users}</code>\n"
-        f"📅 Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
-        "Select an action below:"
+        f"👤 Total Users in DB: <code>{total_users}</code>\n\n"
+        "Select an action:"
     )
     
     await message.answer(text, reply_markup=get_admin_keyboard(), parse_mode="HTML")
-
-@router.callback_query(F.data == "admin_close")
-async def cb_admin_close(call: CallbackQuery):
-    await call.message.delete()
 
 @router.callback_query(F.data == "admin_stats")
 async def cb_admin_stats(call: CallbackQuery):
     """Updates the admin message with fresh stats."""
     if call.from_user.id != ADMIN_ID: return
     
-    # FIX: Added try-except and call.answer to prevent "loading" freeze
-    try:
-        total_users = DatabaseManager.get_total_users()
-        await call.answer(f"📊 Live User Count: {total_users}", show_alert=True)
-    except Exception as e:
-        logger.error(f"Stats Error: {e}")
-        await call.answer("❌ Error loading stats.", show_alert=True)
-
-# ==============================================================================
-#  SECTION 9: BROADCAST WIZARD IMPLEMENTATION
-# ==============================================================================
+    total_users = DatabaseManager.get_total_users()
+    await call.answer(f"Current User Count: {total_users}", show_alert=True)
 
 @router.callback_query(F.data == "admin_broadcast")
 async def cb_admin_broadcast(call: CallbackQuery, state: FSMContext):
     """Starts the Broadcast Wizard."""
     if call.from_user.id != ADMIN_ID: return
     
-    # Clear previous state
+    # Clear previous state to avoid conflicts
     await state.clear()
     
     text = (
         "📢 <b>Broadcast Wizard</b>\n\n"
-        "Select the message type:"
+        "Please select the type of message you want to send to all users:"
     )
-    # FIX: Use try-except in case message is too old to edit
-    try:
-        await call.message.edit_text(text, reply_markup=get_broadcast_start_kb(), parse_mode="HTML")
-    except:
-        await call.message.answer(text, reply_markup=get_broadcast_start_kb(), parse_mode="HTML")
+    await call.message.edit_text(text, reply_markup=get_broadcast_start_kb(), parse_mode="HTML")
 
-# --- Step 0: Cancel ---
+# --- Broadcast: Cancel ---
 @router.callback_query(F.data == "br_cancel", StateFilter(BroadcastState))
 async def br_cancel(call: CallbackQuery, state: FSMContext):
     await state.clear()
     await call.message.edit_text("❌ Broadcast operation cancelled.")
 
-# --- Step 1: Type Selection ---
+# --- Broadcast: Step 1 (Choose Type) ---
 @router.callback_query(F.data == "br_start_media")
 async def br_start_media(call: CallbackQuery, state: FSMContext):
     await state.set_state(BroadcastState.waiting_for_media)
@@ -516,14 +479,11 @@ async def br_start_text(call: CallbackQuery, state: FSMContext):
         parse_mode="HTML"
     )
 
-# --- Step 2: Media Handling (FIXED) ---
+# --- Broadcast: Step 2 (Receive Media) ---
 @router.message(StateFilter(BroadcastState.waiting_for_media))
 async def br_receive_media(message: types.Message, state: FSMContext):
-    # FIX: Enhanced Media Detection
-    media_type = None
-    file_id = None
-
     if message.photo:
+        # Telegram sends multiple sizes, -1 is the highest quality
         file_id = message.photo[-1].file_id
         media_type = "photo"
     elif message.video:
@@ -551,32 +511,25 @@ async def br_goto_text_input(call: CallbackQuery, state: FSMContext):
         parse_mode="HTML"
     )
 
-# --- Step 3: Text Handling (FIXED) ---
+# --- Broadcast: Step 3 (Receive Text) ---
 @router.message(StateFilter(BroadcastState.waiting_for_text))
 async def br_receive_text(message: types.Message, state: FSMContext):
     text = message.text
-    # FIX: Also check caption if user sends another media by mistake or edits
-    if not text:
-        text = message.caption
-    
-    if not text:
-        await message.answer("⚠️ Text/Caption is required. Please type something.")
-        return
-
+    # Basic validation
     if len(text) > 4000:
-        await message.answer("⚠️ Text is too long! Keep it under 4000 characters.")
+        await message.answer("⚠️ Text is too long! Please keep it under 4000 characters.")
         return
 
     await state.update_data(text=text)
     
-    kb = get_nav_buttons("goto_buttons", "goto_text_input")
+    kb = get_nav_buttons("goto_buttons", "goto_text_input") # Go back option implies re-entering text
     await message.answer(
-        "✅ <b>Text Saved!</b>\n\nClick 'Next' to add buttons, or 'Back' to rewrite.", 
+        "✅ <b>Text Saved!</b>\n\nClick 'Next' to add buttons, or 'Back' to rewrite text.", 
         reply_markup=kb, 
         parse_mode="HTML"
     )
 
-# --- Step 4: Button Handling (FIXED) ---
+# --- Broadcast: Step 4 (Buttons) ---
 @router.callback_query(F.data == "goto_buttons", StateFilter(BroadcastState))
 async def br_goto_buttons(call: CallbackQuery, state: FSMContext):
     await state.set_state(BroadcastState.waiting_for_buttons)
@@ -584,7 +537,10 @@ async def br_goto_buttons(call: CallbackQuery, state: FSMContext):
         "3️⃣ <b>Step 3: Add Buttons (Optional)</b>\n\n"
         "Send buttons in this format (one per line):\n"
         "<code>Button Text - https://link.com</code>\n\n"
-        "Type 'skip' to send without buttons."
+        "Example:\n"
+        "<code>Play Now - https://t.me/bot/app</code>\n"
+        "<code>Join Channel - https://t.me/channel</code>\n\n"
+        "👉 <b>Type 'skip' to send without buttons.</b>"
     )
     await call.message.answer(msg, parse_mode="HTML")
 
@@ -595,23 +551,17 @@ async def br_receive_buttons(message: types.Message, state: FSMContext):
     if buttons_text.lower() == 'skip':
         await state.update_data(buttons=None)
     else:
-        # FIX: Validate buttons immediately
+        # Validate buttons
         kb = parse_buttons_text(buttons_text)
         if not kb:
-            await message.answer(
-                "❌ <b>Invalid Format!</b>\n"
-                "Please use: <code>Text - URL</code>\n"
-                "Example: <code>Join Channel - google.com</code>\n\n"
-                "Or type 'skip'.", 
-                parse_mode="HTML"
-            )
+            await message.answer("❌ <b>Invalid Format!</b>\nPlease use: <code>Text - URL</code>\nOr type 'skip'.", parse_mode="HTML")
             return
         await state.update_data(buttons=buttons_text)
     
     # Proceed to Preview
     await br_show_preview(message, state)
 
-# --- Step 5: Preview (FIXED) ---
+# --- Broadcast: Step 5 (Preview & Confirm) ---
 async def br_show_preview(message: types.Message, state: FSMContext):
     data = await state.get_data()
     
@@ -632,7 +582,7 @@ async def br_show_preview(message: types.Message, state: FSMContext):
         else:
             await message.answer(text=text, reply_markup=kb)
     except Exception as e:
-        await message.answer(f"⚠️ <b>Preview Failed:</b> {str(e)}\n\nCheck your content.")
+        await message.answer(f"⚠️ <b>Preview Failed:</b> {str(e)}")
         
     await message.answer("➖➖➖➖ <b>PREVIEW END</b> ➖➖➖➖", parse_mode="HTML")
     
@@ -643,7 +593,7 @@ async def br_show_preview(message: types.Message, state: FSMContext):
         parse_mode="HTML"
     )
 
-# --- Step 6: Execution ---
+# --- Broadcast: Execution ---
 @router.callback_query(F.data == "br_final_send", StateFilter(BroadcastState))
 async def br_execute(call: CallbackQuery, state: FSMContext):
     data = await state.get_data()
@@ -651,14 +601,15 @@ async def br_execute(call: CallbackQuery, state: FSMContext):
     
     await call.message.edit_text("🚀 <b>Broadcast Started!</b>\nYou will receive a report when done.", parse_mode="HTML")
     
-    # Run in background
+    # Run in background so it doesn't block the bot
     asyncio.create_task(run_broadcast_task(call.message.chat.id, data))
 
 async def run_broadcast_task(admin_chat_id, data):
     """
-    Worker function to send messages to all users safely.
+    The worker function that actually sends messages to all users.
+    Includes rate limiting and error counting.
     """
-    users = DatabaseManager.get_all_users_list()
+    users = DatabaseManager.load_users()
     total = len(users)
     sent = 0
     blocked = 0
@@ -673,7 +624,6 @@ async def run_broadcast_task(admin_chat_id, data):
     
     for user_id in users:
         try:
-            # FIX: Properly handle separated media types
             if media_type == 'photo':
                 await bot.send_photo(chat_id=user_id, photo=media_id, caption=text, reply_markup=kb)
             elif media_type == 'video':
@@ -682,17 +632,19 @@ async def run_broadcast_task(admin_chat_id, data):
                 await bot.send_message(chat_id=user_id, text=text, reply_markup=kb)
             
             sent += 1
-            await asyncio.sleep(0.04) # 25 messages/sec limit
+            # Rate limit: 20-25 messages per second safe for broadcasts
+            await asyncio.sleep(0.04) 
             
         except TelegramForbiddenError:
             blocked += 1
         except TelegramRetryAfter as e:
+            # Hit rate limit, sleep for requested time
             await asyncio.sleep(e.retry_after)
-            # Retry logic could go here
+            # Try again (optional, simplified here to just skip counting as error)
             errors += 1
         except Exception as e:
             errors += 1
-            # logger.error(f"Failed to send to {user_id}: {e}")
+            # logger.error(f"Failed to send to {user_id}: {e}") # Uncomment for verbose debugging
             
     duration = round(time.time() - start_time, 2)
     
@@ -708,30 +660,32 @@ async def run_broadcast_task(admin_chat_id, data):
     try:
         await bot.send_message(admin_chat_id, report, parse_mode="HTML")
     except:
-        logger.error("Could not send broadcast report.")
+        logger.error("Could not send broadcast report to admin.")
 
 # ==============================================================================
-#  SECTION 10: PAYMENT HANDLERS
+#  SECTION 8: PAYMENT HANDLERS (TELEGRAM STARS)
 # ==============================================================================
 
 @router.pre_checkout_query()
 async def checkout_handler(checkout_query: PreCheckoutQuery):
     """
     Validates payment before it completes.
+    For digital goods like coins, we usually always return True.
     """
     await bot.answer_pre_checkout_query(checkout_query.id, ok=True)
 
 @router.message(F.successful_payment)
 async def payment_success_handler(message: types.Message):
     """
-    Triggered when payment is successful.
+    Triggered when a user successfully pays.
     """
     user_id = message.from_user.id
     payment_info = message.successful_payment
     amount = payment_info.total_amount
-    payload = payment_info.invoice_payload 
+    currency = payment_info.currency
+    payload = payment_info.invoice_payload # Contains "user_id_item_id"
     
-    logger.info(f"💰 Payment Success: User {user_id} paid {amount}. Payload: {payload}")
+    logger.info(f"💰 Payment Success: User {user_id} paid {amount} {currency}. Payload: {payload}")
     
     await message.answer(
         "✅ <b>Payment Successful!</b>\n\n"
@@ -740,10 +694,10 @@ async def payment_success_handler(message: types.Message):
     )
 
 # ==============================================================================
-#  SECTION 11: API ENDPOINTS (BACKEND LOGIC)
+#  SECTION 9: API ENDPOINTS (BACKEND LOGIC)
 # ==============================================================================
 
-# 11.1 CORS Configuration
+# 9.1 CORS Helpers (Cross-Origin Resource Sharing)
 def cors_response(data, status=200):
     return web.json_response(
         data,
@@ -757,7 +711,7 @@ def cors_response(data, status=200):
     )
 
 async def options_handler(request):
-    """Handles preflight checks."""
+    """Handles preflight checks from browsers."""
     return web.Response(
         status=200,
         headers={
@@ -767,7 +721,7 @@ async def options_handler(request):
         }
     )
 
-# 11.2 API: Verify Join
+# 9.2 API: Verify Join (Channel & Group)
 async def verify_join_api(request):
     """
     Checks if a user has joined the required channel and group.
@@ -784,25 +738,29 @@ async def verify_join_api(request):
         except ValueError:
             return cors_response({"joined": False, "error": "Invalid ID"}, status=400)
 
-        # Helper to check chat member status
+        # Helper to check one chat
         async def check_membership(chat_id):
             try:
                 member = await bot.get_chat_member(chat_id=chat_id, user_id=user_id)
                 return member.status in ['member', 'administrator', 'creator', 'restricted']
             except Exception as e:
+                # If bot isn't admin, it can't check, assume False or Log error
                 logger.warning(f"Membership check failed for {chat_id}: {e}")
                 return False
 
         in_channel = await check_membership(CHANNEL_USERNAME)
         in_group = await check_membership(GROUP_USERNAME)
         
-        return cors_response({"joined": (in_channel and in_group)})
+        # Logic: Must join both
+        is_joined = in_channel and in_group
+        
+        return cors_response({"joined": is_joined})
 
     except Exception as e:
         logger.error(f"Verify API Error: {e}")
         return cors_response({"error": str(e)}, status=500)
 
-# 11.3 API: Create Invoice
+# 9.3 API: Create Invoice
 async def create_invoice_api(request):
     """
     Generates a payment link for Telegram Stars.
@@ -824,7 +782,7 @@ async def create_invoice_api(request):
             title=item['title'],
             description=item.get('desc', 'Game Item'),
             payload=f"{user_id}_{item_id}",
-            provider_token="", # Empty for XTR
+            provider_token="", # Empty for XTR (Stars)
             currency="XTR",
             prices=[LabeledPrice(label=item['title'], amount=item['price'])]
         )
@@ -836,10 +794,10 @@ async def create_invoice_api(request):
         logger.error(f"Invoice API Error: {e}")
         return cors_response({"error": str(e)}, status=500)
 
-# 11.4 API: Verify Ad
+# 9.4 API: Verify Ad
 async def verify_ad_api(request):
     """
-    Validates ad completion.
+    Called by Frontend when an ad is finished.
     """
     try:
         data = await request.json()
@@ -851,15 +809,19 @@ async def verify_ad_api(request):
             return cors_response({"success": False, "error": "Missing ID"}, status=400)
             
         logger.info(f"📺 Ad Watched: User {user_id} | Provider: {provider} | Type: {ad_type}")
+        
+        # Note: In a production app, you might verify a server-side signature here
+        # to prevent fake requests. For now, we assume frontend validity.
+        
         return cors_response({"success": True})
     except Exception as e:
         logger.error(f"Ad Verify Error: {e}")
         return cors_response({"success": False}, status=500)
 
-# 11.5 API: Play Spin
+# 9.5 API: Play Spin
 async def play_spin_api(request):
     """
-    Server-side spin logic to prevent cheating.
+    Determines spin result on server to prevent frontend cheating.
     """
     try:
         data = await request.json()
@@ -868,7 +830,7 @@ async def play_spin_api(request):
         if not user_id:
             return cors_response({"success": False}, status=400)
             
-        # Select random prize securely
+        # Select random prize
         idx = random.randint(0, len(SPIN_PRIZES) - 1)
         amount = SPIN_PRIZES[idx]
         
@@ -883,7 +845,7 @@ async def play_spin_api(request):
         logger.error(f"Spin API Error: {e}")
         return cors_response({"success": False}, status=500)
 
-# 11.6 API: Complete Task
+# 9.6 API: Complete Task
 async def complete_task_api(request):
     """
     Logs task completion.
@@ -897,56 +859,68 @@ async def complete_task_api(request):
             return cors_response({"success": False}, status=400)
             
         logger.info(f"✅ Task Completed: User {user_id}, Task {task_id}")
+        
         return cors_response({"success": True})
     except Exception as e:
         logger.error(f"Task API Error: {e}")
         return cors_response({"success": False}, status=500)
 
-# 11.7 API: Home
+# 9.7 Root Handler (Health Check)
 async def home_handler(request):
     return web.Response(text="☃️ Snowman Adventure Backend is Running Successfully! ❄️")
 
 # ==============================================================================
-#  SECTION 12: SERVER EXECUTION
+#  SECTION 10: APP EXECUTION & LIFECYCLE
 # ==============================================================================
 
 async def on_startup(bot: Bot):
-    """Runs on server start."""
+    """
+    Runs when the server starts.
+    Sets the webhook.
+    """
     logger.info("🚀 Server Starting...")
     
     if WEBHOOK_URL.startswith("https://"):
         logger.info(f"🔗 Setting Webhook: {WEBHOOK_URL}")
         try:
+            # Delete old webhook to remove pending updates (prevents flood)
             await bot.delete_webhook(drop_pending_updates=True)
+            # Set new webhook
             await bot.set_webhook(WEBHOOK_URL)
             logger.info("✅ Webhook Set Successfully.")
             
+            # Optional: Set commands menu
             await bot.set_my_commands([
                 BotCommand(command="start", description="Start Game"),
                 BotCommand(command="help", description="Get Help"),
-                BotCommand(command="admin", description="Admin Panel"),
             ])
+            
         except Exception as e:
             logger.error(f"❌ Failed to set webhook: {e}")
     else:
-        logger.warning("⚠️ Webhook URL must be HTTPS.")
+        logger.warning("⚠️ Webhook URL must be HTTPS. Skipping webhook setup.")
 
 async def on_shutdown(bot: Bot):
-    """Runs on server stop."""
+    """
+    Runs when server stops.
+    Cleans up resources.
+    """
     logger.info("🔌 Server Shutting Down...")
     await bot.delete_webhook()
     await bot.session.close()
 
 def main():
-    """Main Application Entry Point."""
-    
-    # Create Web App
+    """
+    Main entry point of the application.
+    """
+    # 1. Create Web Application
     app = web.Application()
     
-    # Register Routes
+    # 2. Configure Routes
+    # Root
     app.router.add_get('/', home_handler)
     
-    # API Routes
+    # API Routes with Options (Preflight)
     api_routes = [
         ('/verify_join', verify_join_api),
         ('/create_invoice', create_invoice_api),
@@ -959,14 +933,15 @@ def main():
         app.router.add_post(path, handler)
         app.router.add_options(path, options_handler)
 
-    # Webhook Handler
+    # 3. Configure Webhook Route (handled by Aiogram)
     webhook_handler = SimpleRequestHandler(dispatcher=dp, bot=bot)
     webhook_handler.register(app, path=WEBHOOK_PATH)
 
-    # Setup
+    # 4. Register Startup/Shutdown Hooks
     setup_application(app, dp, bot=bot)
     
-    # Run
+    # 5. Run the Server
+    # Render provides PORT environment variable
     logger.info(f"🌍 Starting Web Server on Port {PORT}")
     web.run_app(app, host="0.0.0.0", port=PORT)
 
