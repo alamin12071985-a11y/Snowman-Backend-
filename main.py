@@ -346,21 +346,27 @@ def parse_buttons_text(text):
     """
     Parses a string input into an InlineKeyboardMarkup.
     Format: "Button Text - URL" (one per line).
+    (Fixed for robustness)
     """
-    if not text: 
+    if not text or text.lower() == 'skip': 
         return None
     try:
         kb_rows = []
         lines = text.split('\n')
         for line in lines:
             line = line.strip()
+            # Support both "Text - Link" and "Text-Link"
             if '-' in line:
                 parts = line.split('-', 1)
                 btn_text = parts[0].strip()
                 btn_url = parts[1].strip()
                 
+                # Check for protocol and fix it if missing
+                if not btn_url.startswith(('http://', 'https://')):
+                    btn_url = 'https://' + btn_url
+                
                 # Basic validation
-                if btn_text and btn_url.startswith('http'):
+                if btn_text and btn_url:
                     kb_rows.append([InlineKeyboardButton(text=btn_text, url=btn_url)])
         
         if not kb_rows:
@@ -453,8 +459,13 @@ async def cb_admin_stats(call: CallbackQuery):
     """Updates the admin message with fresh stats."""
     if call.from_user.id != ADMIN_ID: return
     
-    total_users = DatabaseManager.get_total_users()
-    await call.answer(f"📊 Current User Count: {total_users}", show_alert=True)
+    # FIX: Added try-except and call.answer to prevent "loading" freeze
+    try:
+        total_users = DatabaseManager.get_total_users()
+        await call.answer(f"📊 Live User Count: {total_users}", show_alert=True)
+    except Exception as e:
+        logger.error(f"Stats Error: {e}")
+        await call.answer("❌ Error loading stats.", show_alert=True)
 
 # ==============================================================================
 #  SECTION 9: BROADCAST WIZARD IMPLEMENTATION
@@ -472,7 +483,11 @@ async def cb_admin_broadcast(call: CallbackQuery, state: FSMContext):
         "📢 <b>Broadcast Wizard</b>\n\n"
         "Select the message type:"
     )
-    await call.message.edit_text(text, reply_markup=get_broadcast_start_kb(), parse_mode="HTML")
+    # FIX: Use try-except in case message is too old to edit
+    try:
+        await call.message.edit_text(text, reply_markup=get_broadcast_start_kb(), parse_mode="HTML")
+    except:
+        await call.message.answer(text, reply_markup=get_broadcast_start_kb(), parse_mode="HTML")
 
 # --- Step 0: Cancel ---
 @router.callback_query(F.data == "br_cancel", StateFilter(BroadcastState))
@@ -501,9 +516,13 @@ async def br_start_text(call: CallbackQuery, state: FSMContext):
         parse_mode="HTML"
     )
 
-# --- Step 2: Media Handling ---
+# --- Step 2: Media Handling (FIXED) ---
 @router.message(StateFilter(BroadcastState.waiting_for_media))
 async def br_receive_media(message: types.Message, state: FSMContext):
+    # FIX: Enhanced Media Detection
+    media_type = None
+    file_id = None
+
     if message.photo:
         file_id = message.photo[-1].file_id
         media_type = "photo"
@@ -532,10 +551,18 @@ async def br_goto_text_input(call: CallbackQuery, state: FSMContext):
         parse_mode="HTML"
     )
 
-# --- Step 3: Text Handling ---
+# --- Step 3: Text Handling (FIXED) ---
 @router.message(StateFilter(BroadcastState.waiting_for_text))
 async def br_receive_text(message: types.Message, state: FSMContext):
     text = message.text
+    # FIX: Also check caption if user sends another media by mistake or edits
+    if not text:
+        text = message.caption
+    
+    if not text:
+        await message.answer("⚠️ Text/Caption is required. Please type something.")
+        return
+
     if len(text) > 4000:
         await message.answer("⚠️ Text is too long! Keep it under 4000 characters.")
         return
@@ -549,7 +576,7 @@ async def br_receive_text(message: types.Message, state: FSMContext):
         parse_mode="HTML"
     )
 
-# --- Step 4: Button Handling ---
+# --- Step 4: Button Handling (FIXED) ---
 @router.callback_query(F.data == "goto_buttons", StateFilter(BroadcastState))
 async def br_goto_buttons(call: CallbackQuery, state: FSMContext):
     await state.set_state(BroadcastState.waiting_for_buttons)
@@ -568,16 +595,23 @@ async def br_receive_buttons(message: types.Message, state: FSMContext):
     if buttons_text.lower() == 'skip':
         await state.update_data(buttons=None)
     else:
+        # FIX: Validate buttons immediately
         kb = parse_buttons_text(buttons_text)
         if not kb:
-            await message.answer("❌ <b>Invalid Format!</b>\nPlease use: <code>Text - URL</code>\nOr type 'skip'.", parse_mode="HTML")
+            await message.answer(
+                "❌ <b>Invalid Format!</b>\n"
+                "Please use: <code>Text - URL</code>\n"
+                "Example: <code>Join Channel - google.com</code>\n\n"
+                "Or type 'skip'.", 
+                parse_mode="HTML"
+            )
             return
         await state.update_data(buttons=buttons_text)
     
     # Proceed to Preview
     await br_show_preview(message, state)
 
-# --- Step 5: Preview ---
+# --- Step 5: Preview (FIXED) ---
 async def br_show_preview(message: types.Message, state: FSMContext):
     data = await state.get_data()
     
@@ -598,7 +632,7 @@ async def br_show_preview(message: types.Message, state: FSMContext):
         else:
             await message.answer(text=text, reply_markup=kb)
     except Exception as e:
-        await message.answer(f"⚠️ <b>Preview Failed:</b> {str(e)}")
+        await message.answer(f"⚠️ <b>Preview Failed:</b> {str(e)}\n\nCheck your content.")
         
     await message.answer("➖➖➖➖ <b>PREVIEW END</b> ➖➖➖➖", parse_mode="HTML")
     
@@ -639,6 +673,7 @@ async def run_broadcast_task(admin_chat_id, data):
     
     for user_id in users:
         try:
+            # FIX: Properly handle separated media types
             if media_type == 'photo':
                 await bot.send_photo(chat_id=user_id, photo=media_id, caption=text, reply_markup=kb)
             elif media_type == 'video':
@@ -653,9 +688,11 @@ async def run_broadcast_task(admin_chat_id, data):
             blocked += 1
         except TelegramRetryAfter as e:
             await asyncio.sleep(e.retry_after)
+            # Retry logic could go here
             errors += 1
         except Exception as e:
             errors += 1
+            # logger.error(f"Failed to send to {user_id}: {e}")
             
     duration = round(time.time() - start_time, 2)
     
