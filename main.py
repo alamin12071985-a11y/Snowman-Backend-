@@ -45,8 +45,6 @@ from aiogram.exceptions import (
 # ==============================================================================
 
 # 1.1 Logging Configuration
-# Setting up a robust logging format to track every event in the system.
-# This helps in debugging production issues effectively.
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - [%(levelname)s] - [%(name)s] - %(message)s",
@@ -55,13 +53,11 @@ logging.basicConfig(
 logger = logging.getLogger("SnowmanBackendCore")
 
 # 1.2 Environment Variable Loading
-# These variables must be present in the deployment environment (Render/Heroku/VPS).
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 APP_URL = os.getenv("APP_URL")
 PORT = int(os.getenv("PORT", 10000))
 
 # 1.3 Admin & Community Settings
-# Hardcoded IDs for administration and channel verification.
 ADMIN_ID = 7605281774  
 CHANNEL_USERNAME = "@snowmanadventureannouncement" 
 GROUP_USERNAME = "@snowmanadventuregroup" 
@@ -76,7 +72,6 @@ if not APP_URL:
     sys.exit(1)
 
 # 1.5 Webhook Path Construction
-# Ensuring the URL is correctly formatted to avoid double slashes.
 APP_URL = str(APP_URL).rstrip("/")
 WEBHOOK_PATH = f"/webhook/{BOT_TOKEN}"
 WEBHOOK_URL = f"{APP_URL}{WEBHOOK_PATH}"
@@ -215,22 +210,6 @@ class DatabaseManager:
     """
     Advanced JSON Database Manager.
     Handles User Data, Referrals, Analytics, and Backups.
-    Structure:
-    {
-        "user_id_string": {
-            "username": "str",
-            "first_name": "str",
-            "balance": float,
-            "tonBalance": float,
-            "level": int,
-            "currentLevelScore": float,
-            "tapCount": int,
-            "referrals": [list_of_ids],
-            "referredBy": "id" or None,
-            "joined_date": timestamp,
-            "last_active": timestamp
-        }
-    }
     """
     
     @staticmethod
@@ -371,9 +350,6 @@ class DatabaseManager:
             return False
         
         user = db[uid_str]
-        
-        # Validations could go here (Anti-Cheat)
-        # e.g., if data['balance'] > user['balance'] + max_possible_gain: flag_user()
         
         if 'balance' in data: user['balance'] = data['balance']
         if 'tonBalance' in data: user['tonBalance'] = data['tonBalance']
@@ -827,64 +803,67 @@ async def run_broadcast_task(admin_chat_id: int, data: dict):
     Background worker for broadcasting messages.
     Includes rate limiting and error tracking.
     """
-    users = DatabaseManager.get_all_user_ids()
-    total = len(users)
-    sent = 0
-    blocked = 0
-    errors = 0
-    start_time = time.time()
-    
-    m_type = data.get("media_type")
-    m_id = data.get("media_id")
-    text = data.get("text")
-    kb = parse_buttons_text(data.get("buttons"))
-    
-    # Progress update interval (every 100 users)
-    update_interval = 100
-    
-    for index, uid in enumerate(users):
-        try:
-            if m_type == "text":
-                await bot.send_message(uid, text, reply_markup=kb, parse_mode="HTML")
-            elif m_type == "photo":
-                await bot.send_photo(uid, m_id, caption=text, reply_markup=kb, parse_mode="HTML")
-            elif m_type == "video":
-                await bot.send_video(uid, m_id, caption=text, reply_markup=kb, parse_mode="HTML")
-            
-            sent += 1
-            await asyncio.sleep(0.04) # 25 msg/sec limit (Safe side)
-            
-        except TelegramForbiddenError:
-            blocked += 1
-            # Mark user as blocked in DB to skip next time? Optional.
-        except TelegramRetryAfter as e:
-            logger.warning(f"Rate Limited! Sleeping {e.retry_after}s")
-            await asyncio.sleep(e.retry_after)
-            errors += 1
-        except Exception as e:
-            logger.error(f"Broadcast Fail for {uid}: {e}")
-            errors += 1
-            
-        # Optional: Send progress report to admin periodically
-        if (index + 1) % update_interval == 0:
-            logger.info(f"Broadcast Progress: {index + 1}/{total}")
-
-    duration = round(time.time() - start_time, 2)
-    
-    final_report = (
-        "✅ <b>Broadcast Finished!</b>\n"
-        "---------------------------\n"
-        f"🎯 Target Users: {total}\n"
-        f"📨 Sent: {sent}\n"
-        f"🚫 Blocked: {blocked}\n"
-        f"⚠️ Errors: {errors}\n"
-        f"⏱️ Time Taken: {duration}s"
-    )
-    
     try:
-        await bot.send_message(admin_chat_id, final_report, parse_mode="HTML")
-    except:
-        logger.error("Failed to send broadcast report.")
+        users = DatabaseManager.get_all_user_ids()
+        total = len(users)
+        sent = 0
+        blocked = 0
+        errors = 0
+        start_time = time.time()
+        
+        m_type = data.get("media_type")
+        m_id = data.get("media_id")
+        text = data.get("text")
+        kb = parse_buttons_text(data.get("buttons"))
+        
+        # Progress update interval (every 100 users)
+        update_interval = 100
+        
+        for index, uid in enumerate(users):
+            try:
+                if m_type == "text":
+                    await bot.send_message(uid, text, reply_markup=kb, parse_mode="HTML")
+                elif m_type == "photo":
+                    await bot.send_photo(uid, m_id, caption=text, reply_markup=kb, parse_mode="HTML")
+                elif m_type == "video":
+                    await bot.send_video(uid, m_id, caption=text, reply_markup=kb, parse_mode="HTML")
+                
+                sent += 1
+                await asyncio.sleep(0.04) # 25 msg/sec limit (Safe side)
+                
+            except TelegramForbiddenError:
+                blocked += 1
+                # Mark user as blocked in DB to skip next time? Optional.
+            except TelegramRetryAfter as e:
+                logger.warning(f"Rate Limited! Sleeping {e.retry_after}s")
+                await asyncio.sleep(e.retry_after)
+                errors += 1
+            except Exception as e:
+                logger.error(f"Broadcast Fail for {uid}: {e}")
+                errors += 1
+                
+            # Optional: Send progress report to admin periodically
+            if (index + 1) % update_interval == 0:
+                logger.info(f"Broadcast Progress: {index + 1}/{total}")
+
+        duration = round(time.time() - start_time, 2)
+        
+        final_report = (
+            "✅ <b>Broadcast Finished!</b>\n"
+            "---------------------------\n"
+            f"🎯 Target Users: {total}\n"
+            f"📨 Sent: {sent}\n"
+            f"🚫 Blocked: {blocked}\n"
+            f"⚠️ Errors: {errors}\n"
+            f"⏱️ Time Taken: {duration}s"
+        )
+        
+        try:
+            await bot.send_message(admin_chat_id, final_report, parse_mode="HTML")
+        except:
+            logger.error("Failed to send broadcast report.")
+    except Exception as e:
+        logger.error(f"CRITICAL BROADCAST FAILURE: {e}")
 
 # ==============================================================================
 #  SECTION 8: PAYMENT HANDLERS (TELEGRAM STARS)
@@ -1203,7 +1182,7 @@ async def home_handler(request):
 #  SECTION 10: APPLICATION LIFECYCLE & EXECUTION
 # ==============================================================================
 
-async def on_startup(bot: Bot):
+async def on_startup(dispatcher: Dispatcher, bot: Bot):
     """Triggered when the server starts."""
     logger.info("🚀 Server Initiation Sequence Started...")
     
@@ -1226,7 +1205,7 @@ async def on_startup(bot: Bot):
     else:
         logger.warning("⚠️ Webhook not set: URL must be HTTPS (SSL).")
 
-async def on_shutdown(bot: Bot):
+async def on_shutdown(dispatcher: Dispatcher, bot: Bot):
     """Triggered when the server stops."""
     logger.info("🔌 Server Shutdown Sequence Initiated...")
     
@@ -1269,6 +1248,10 @@ def main():
     webhook_handler.register(app, path=WEBHOOK_PATH)
 
     # 4. Attach Hooks
+    # ⚠️ IMPORTANT FIX: Register startup/shutdown hooks explicitly
+    dp.startup.register(on_startup)
+    dp.shutdown.register(on_shutdown)
+    
     setup_application(app, dp, bot=bot)
     
     # 5. Launch
