@@ -45,8 +45,6 @@ from aiogram.exceptions import (
 # ==============================================================================
 
 # 1.1 Logging Configuration
-# Setting up a robust logging format to track every event in the system.
-# This helps in debugging production issues effectively.
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - [%(levelname)s] - [%(name)s] - %(message)s",
@@ -55,13 +53,11 @@ logging.basicConfig(
 logger = logging.getLogger("SnowmanBackendCore")
 
 # 1.2 Environment Variable Loading
-# These variables must be present in the deployment environment (Render/Heroku/VPS).
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 APP_URL = os.getenv("APP_URL")
 PORT = int(os.getenv("PORT", 10000))
 
 # 1.3 Admin & Community Settings
-# Hardcoded IDs for administration and channel verification.
 ADMIN_ID = 7605281774  
 CHANNEL_USERNAME = "@snowmanadventureannouncement" 
 GROUP_USERNAME = "@snowmanadventuregroup" 
@@ -76,7 +72,6 @@ if not APP_URL:
     sys.exit(1)
 
 # 1.5 Webhook Path Construction
-# Ensuring the URL is correctly formatted to avoid double slashes.
 APP_URL = str(APP_URL).rstrip("/")
 WEBHOOK_PATH = f"/webhook/{BOT_TOKEN}"
 WEBHOOK_URL = f"{APP_URL}{WEBHOOK_PATH}"
@@ -91,11 +86,9 @@ logger.info(f"🔗 Webhook URL Configured: {WEBHOOK_URL}")
 class GameConfig:
     """
     Central configuration for game mechanics, shop items, and rewards.
-    This class manages all static data to keep the main logic clean.
     """
     
     # 2.1 Telegram Stars Shop Items
-    # Structure: Item ID -> {Price, Amount, Title, Description}
     SHOP_ITEMS = {
         # --- Coin Packs ---
         'coin_starter': {
@@ -137,7 +130,7 @@ class GameConfig:
         # --- Boosters ---
         'booster_3d': {
             'price': 20, 
-            'amount': 3 * 24 * 3600, # Seconds
+            'amount': 3 * 24 * 3600, 
             'title': '3 Days Booster (x2)', 
             'desc': 'Double your tapping power for 3 days.',
             'type': 'booster'
@@ -181,7 +174,7 @@ class GameConfig:
         },
     }
 
-    # 2.2 Spin Game Prizes (TON Amounts)
+    # 2.2 Spin Game Prizes
     SPIN_PRIZES = [
         0.00000048, 
         0.00000060,
@@ -197,11 +190,10 @@ class GameConfig:
     INITIAL_BALANCE = 500
     REFERRAL_BONUS = 5000
     MAX_DAILY_ADS = 50
-    TASK_REWARD_DELAY = 5 # Seconds to wait before validating
+    TASK_REWARD_DELAY = 5 
     
     @staticmethod
     def get_item(item_id: str) -> dict:
-        """Retrieves an item configuration safely."""
         return GameConfig.SHOP_ITEMS.get(item_id)
 
 # ==============================================================================
@@ -214,28 +206,10 @@ BACKUP_DIR = "backups"
 class DatabaseManager:
     """
     Advanced JSON Database Manager.
-    Handles User Data, Referrals, Analytics, and Backups.
-    Structure:
-    {
-        "user_id_string": {
-            "username": "str",
-            "first_name": "str",
-            "balance": float,
-            "tonBalance": float,
-            "level": int,
-            "currentLevelScore": float,
-            "tapCount": int,
-            "referrals": [list_of_ids],
-            "referredBy": "id" or None,
-            "joined_date": timestamp,
-            "last_active": timestamp
-        }
-    }
     """
     
     @staticmethod
     def _initialize_db():
-        """Creates the DB file and backup directory if they don't exist."""
         if not os.path.exists(DB_FILE):
             try:
                 with open(DB_FILE, "w", encoding='utf-8') as f:
@@ -249,7 +223,6 @@ class DatabaseManager:
 
     @staticmethod
     def load_db() -> Dict:
-        """Reads the full database dictionary with error handling."""
         DatabaseManager._initialize_db()
         try:
             with open(DB_FILE, "r", encoding='utf-8') as f:
@@ -257,14 +230,11 @@ class DatabaseManager:
                 if not content:
                     return {}
                 data = json.loads(content)
-                
-                # Legacy Support: If DB was a list, convert to dict
                 if isinstance(data, list):
                     logger.warning("⚠️ Legacy DB format detected. Migrating to Dictionary...")
                     new_data = {str(uid): DatabaseManager._get_default_schema() for uid in data}
                     DatabaseManager.save_full_db(new_data)
                     return new_data
-                    
                 return data
         except json.JSONDecodeError:
             logger.error("⚠️ JSON Decode Error. Returning empty DB.")
@@ -275,27 +245,22 @@ class DatabaseManager:
 
     @staticmethod
     def save_full_db(data: Dict):
-        """Writes the full dictionary to file atomically."""
         try:
             temp_file = f"{DB_FILE}.tmp"
             with open(temp_file, "w", encoding='utf-8') as f:
                 json.dump(data, f, indent=2, ensure_ascii=False)
-            
-            # Atomic replacement
             os.replace(temp_file, DB_FILE)
         except Exception as e:
             logger.error(f"❌ Failed to save DB: {e}")
 
     @staticmethod
     def create_backup():
-        """Creates a timestamped backup of the database."""
         try:
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             backup_path = os.path.join(BACKUP_DIR, f"users_{timestamp}.json")
             shutil.copy2(DB_FILE, backup_path)
             logger.info(f"📦 Database backup created: {backup_path}")
             
-            # Cleanup old backups (keep last 5)
             backups = sorted(os.listdir(BACKUP_DIR))
             if len(backups) > 5:
                 os.remove(os.path.join(BACKUP_DIR, backups[0]))
@@ -304,7 +269,6 @@ class DatabaseManager:
 
     @staticmethod
     def _get_default_schema() -> Dict:
-        """Returns the default user object structure."""
         return {
             "balance": GameConfig.INITIAL_BALANCE,
             "tonBalance": 0.0,
@@ -320,40 +284,32 @@ class DatabaseManager:
 
     @staticmethod
     def get_user(user_id: Union[int, str]) -> Optional[Dict]:
-        """Gets data for a specific user."""
         db = DatabaseManager.load_db()
         return db.get(str(user_id))
 
     @staticmethod
     def register_user(user_id: int, username: str, first_name: str, referrer_id: Optional[str] = None):
-        """Registers a new user and handles referral bonus."""
         db = DatabaseManager.load_db()
         uid_str = str(user_id)
         
         if uid_str in db:
-            # User exists, just update info
             db[uid_str]["username"] = username
             db[uid_str]["first_name"] = first_name
             db[uid_str]["last_active"] = time.time()
             DatabaseManager.save_full_db(db)
-            return False # Not a new user
+            return False
         
-        # New User
         new_user = DatabaseManager._get_default_schema()
         new_user["username"] = username
         new_user["first_name"] = first_name
         
-        # Referral Logic
         if referrer_id and referrer_id != uid_str and referrer_id in db:
             new_user["referredBy"] = referrer_id
-            # Bonus to Referrer
             db[referrer_id]["balance"] = db[referrer_id].get("balance", 0) + GameConfig.REFERRAL_BONUS
             if "referrals" not in db[referrer_id]:
                 db[referrer_id]["referrals"] = []
             db[referrer_id]["referrals"].append(uid_str)
             logger.info(f"🤝 Referral: {uid_str} joined via {referrer_id}")
-            
-            # Bonus to New User
             new_user["balance"] += GameConfig.REFERRAL_BONUS
 
         db[uid_str] = new_user
@@ -363,7 +319,6 @@ class DatabaseManager:
 
     @staticmethod
     def update_user_progress(user_id: int, data: dict):
-        """Updates user game progress from frontend sync."""
         db = DatabaseManager.load_db()
         uid_str = str(user_id)
         
@@ -371,9 +326,6 @@ class DatabaseManager:
             return False
         
         user = db[uid_str]
-        
-        # Validations could go here (Anti-Cheat)
-        # e.g., if data['balance'] > user['balance'] + max_possible_gain: flag_user()
         
         if 'balance' in data: user['balance'] = data['balance']
         if 'tonBalance' in data: user['tonBalance'] = data['tonBalance']
@@ -389,19 +341,16 @@ class DatabaseManager:
 
     @staticmethod
     def get_all_user_ids() -> List[int]:
-        """Returns a list of all user IDs for broadcasting."""
         db = DatabaseManager.load_db()
         return [int(uid) for uid in db.keys() if not db[uid].get('is_blocked', False)]
 
     @staticmethod
     def get_stats() -> Dict:
-        """Calculates system-wide statistics."""
         db = DatabaseManager.load_db()
         total_users = len(db)
         total_balance = sum(u.get('balance', 0) for u in db.values())
         total_ton = sum(u.get('tonBalance', 0) for u in db.values())
         
-        # Daily Active Users (last 24h)
         one_day_ago = time.time() - 86400
         dau = sum(1 for u in db.values() if u.get('last_active', 0) > one_day_ago)
         
@@ -412,36 +361,25 @@ class DatabaseManager:
             "dau": dau
         }
 
-# Initialize Database
 DatabaseManager._initialize_db()
 
 # ==============================================================================
 #  SECTION 4: BOT SETUP, MIDDLEWARE & STATES
 # ==============================================================================
 
-# 4.1 FSM Storage
 storage = MemoryStorage()
-
-# 4.2 Bot & Dispatcher Initialization
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher(storage=storage)
 router = Router()
 dp.include_router(router)
 
-# 4.3 State Definitions
 class BroadcastState(StatesGroup):
-    """FSM States for the Admin Broadcast Wizard."""
     menu = State()
     waiting_for_media = State()
     waiting_for_text = State()
     waiting_for_buttons = State()
     confirm_send = State()
 
-class MaintenanceState(StatesGroup):
-    """FSM State for Maintenance Mode."""
-    active = State()
-
-# 4.4 Global Maintenance Mode Flag
 MAINTENANCE_MODE = False
 
 # ==============================================================================
@@ -449,7 +387,6 @@ MAINTENANCE_MODE = False
 # ==============================================================================
 
 def get_main_keyboard():
-    """Generates the primary menu keyboard."""
     return InlineKeyboardMarkup(inline_keyboard=[
         [
             InlineKeyboardButton(
@@ -476,7 +413,6 @@ def get_main_keyboard():
     ])
 
 def get_admin_keyboard():
-    """Generates the admin control panel keyboard."""
     status = "🔴 ON" if MAINTENANCE_MODE else "🟢 OFF"
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="📢 New Broadcast", callback_data="admin_broadcast")],
@@ -486,7 +422,6 @@ def get_admin_keyboard():
     ])
 
 def get_broadcast_type_kb():
-    """Keyboard for selecting broadcast message type."""
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🖼️ Photo + Text", callback_data="br_start_media_photo")],
         [InlineKeyboardButton(text="📹 Video + Text", callback_data="br_start_media_video")],
@@ -495,24 +430,18 @@ def get_broadcast_type_kb():
     ])
 
 def get_nav_buttons(next_cb: str, back_cb: str):
-    """Reusable navigation buttons."""
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="➡️ Next Step", callback_data=next_cb)],
         [InlineKeyboardButton(text="🔙 Go Back", callback_data=back_cb)]
     ])
 
 def get_final_confirm_kb():
-    """Confirmation keyboard for dangerous actions."""
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🚀 CONFIRM & SEND NOW", callback_data="br_final_send")],
         [InlineKeyboardButton(text="❌ CANCEL EVERYTHING", callback_data="br_cancel")]
     ])
 
 def parse_buttons_text(text: str) -> Optional[InlineKeyboardMarkup]:
-    """
-    Parses a string into an Inline Keyboard.
-    Format: "Button Text - URL"
-    """
     if not text or text.lower() == 'skip': 
         return None
     try:
@@ -536,10 +465,6 @@ def parse_buttons_text(text: str) -> Optional[InlineKeyboardMarkup]:
 
 @router.message(CommandStart())
 async def cmd_start(message: types.Message, command: CommandObject):
-    """
-    Handles the /start command.
-    Registers the user and processes referrals.
-    """
     if MAINTENANCE_MODE and message.from_user.id != ADMIN_ID:
         await message.answer("🚧 **System Under Maintenance**\nPlease try again later.")
         return
@@ -549,7 +474,6 @@ async def cmd_start(message: types.Message, command: CommandObject):
     first_name = message.from_user.first_name or "User"
     referrer_id = command.args
 
-    # Register User
     is_new = DatabaseManager.register_user(user_id, username, first_name, referrer_id)
     
     welcome_text = (
@@ -575,7 +499,6 @@ async def cmd_start(message: types.Message, command: CommandObject):
 @router.message(Command("help"))
 @router.callback_query(F.data == "show_help")
 async def cmd_help(event: Union[types.Message, CallbackQuery]):
-    """Provides help instructions."""
     text = (
         "<b>🆘 Snowman Adventure Help Center</b>\n\n"
         "1. <b>Play Game:</b> Click the main menu button to open the web app.\n"
@@ -594,10 +517,8 @@ async def cmd_help(event: Union[types.Message, CallbackQuery]):
 
 @router.callback_query(F.data == "show_leaderboard")
 async def cb_leaderboard(call: CallbackQuery):
-    """Displays a mini leaderboard in the bot chat."""
     db = DatabaseManager.load_db()
     
-    # Sort users by balance
     sorted_users = sorted(
         db.items(), 
         key=lambda item: item[1].get('balance', 0), 
@@ -611,7 +532,6 @@ async def cb_leaderboard(call: CallbackQuery):
         name = data.get('username', 'Unknown')
         bal = data.get('balance', 0)
         
-        # Medals for top 3
         if idx == 1: icon = "🥇"
         elif idx == 2: icon = "🥈"
         elif idx == 3: icon = "🥉"
@@ -628,9 +548,8 @@ async def cb_leaderboard(call: CallbackQuery):
 
 @router.message(Command("admin"))
 async def cmd_admin_panel(message: types.Message):
-    """Entry point for the Admin Panel."""
     if message.from_user.id != ADMIN_ID:
-        return # Silent ignore
+        return 
     
     stats = DatabaseManager.get_stats()
     
@@ -647,7 +566,6 @@ async def cmd_admin_panel(message: types.Message):
 
 @router.callback_query(F.data == "admin_stats")
 async def cb_refresh_stats(call: CallbackQuery):
-    """Refreshes the admin stats view."""
     if call.from_user.id != ADMIN_ID: return
     
     stats = DatabaseManager.get_stats()
@@ -667,14 +585,12 @@ async def cb_refresh_stats(call: CallbackQuery):
 
 @router.callback_query(F.data == "admin_backup")
 async def cb_force_backup(call: CallbackQuery):
-    """Triggers an immediate database backup."""
     if call.from_user.id != ADMIN_ID: return
     DatabaseManager.create_backup()
     await call.answer("✅ Backup Created Successfully!", show_alert=True)
 
 @router.callback_query(F.data == "admin_toggle_maint")
 async def cb_toggle_maintenance(call: CallbackQuery):
-    """Toggles maintenance mode."""
     global MAINTENANCE_MODE
     if call.from_user.id != ADMIN_ID: return
     
@@ -682,15 +598,12 @@ async def cb_toggle_maintenance(call: CallbackQuery):
     status = "ENABLED" if MAINTENANCE_MODE else "DISABLED"
     
     await call.answer(f"Maintenance Mode {status}", show_alert=True)
-    
-    # Update keyboard
     await call.message.edit_reply_markup(reply_markup=get_admin_keyboard())
 
 # --- Broadcast Wizard Implementation ---
 
 @router.callback_query(F.data == "admin_broadcast")
 async def br_start(call: CallbackQuery, state: FSMContext):
-    """Step 0: Start Broadcast"""
     if call.from_user.id != ADMIN_ID: return
     await state.clear()
     await call.message.edit_text(
@@ -700,15 +613,12 @@ async def br_start(call: CallbackQuery, state: FSMContext):
     )
 
 @router.callback_query(F.data == "br_cancel", StateFilter(BroadcastState))
-@router.callback_query(F.data == "br_cancel", StateFilter(None))
 async def br_cancel_handler(call: CallbackQuery, state: FSMContext):
-    """Cancel Action"""
     await state.clear()
     await call.message.edit_text("❌ Operation Cancelled.", reply_markup=None)
 
 @router.callback_query(F.data.startswith("br_start_"), StateFilter(None))
 async def br_select_type(call: CallbackQuery, state: FSMContext):
-    """Step 1: Type Selection"""
     m_type = call.data.replace("br_start_", "")
     
     if m_type == "text":
@@ -716,15 +626,13 @@ async def br_select_type(call: CallbackQuery, state: FSMContext):
         await state.set_state(BroadcastState.waiting_for_text)
         await call.message.edit_text("📝 <b>Send the message text now:</b>", parse_mode="HTML")
     else:
-        # Photo or Video
-        clean_type = m_type.replace("media_", "") # photo or video
+        clean_type = m_type.replace("media_", "") 
         await state.update_data(media_type=clean_type)
         await state.set_state(BroadcastState.waiting_for_media)
         await call.message.edit_text(f"📤 <b>Please send the {clean_type.upper()} now:</b>", parse_mode="HTML")
 
 @router.message(StateFilter(BroadcastState.waiting_for_media))
 async def br_receive_media(message: types.Message, state: FSMContext):
-    """Step 2: Receive Media"""
     data = await state.get_data()
     expected_type = data.get("media_type")
     
@@ -749,7 +657,6 @@ async def br_receive_media(message: types.Message, state: FSMContext):
 
 @router.message(StateFilter(BroadcastState.waiting_for_text))
 async def br_receive_text(message: types.Message, state: FSMContext):
-    """Step 3: Receive Text"""
     text = message.text
     if text == "/skip": text = ""
     
@@ -766,7 +673,6 @@ async def br_receive_text(message: types.Message, state: FSMContext):
 
 @router.message(StateFilter(BroadcastState.waiting_for_buttons))
 async def br_receive_buttons(message: types.Message, state: FSMContext):
-    """Step 4: Receive Buttons & Preview"""
     text = message.text
     
     if text.lower() == "skip":
@@ -782,7 +688,6 @@ async def br_receive_buttons(message: types.Message, state: FSMContext):
     await br_show_preview(message, state)
 
 async def br_show_preview(message: types.Message, state: FSMContext):
-    """Step 5: Preview"""
     data = await state.get_data()
     m_type = data.get("media_type")
     m_id = data.get("media_id")
@@ -814,20 +719,13 @@ async def br_show_preview(message: types.Message, state: FSMContext):
 
 @router.callback_query(F.data == "br_final_send", StateFilter(BroadcastState.confirm_send))
 async def br_execute_broadcast(call: CallbackQuery, state: FSMContext):
-    """Step 6: Execute Background Task"""
     data = await state.get_data()
     await state.clear()
     
     await call.message.edit_text("🚀 <b>Broadcast Initiated!</b>\nRunning in background...", parse_mode="HTML")
-    
-    # Run the heavy lifting in a separate async task
     asyncio.create_task(run_broadcast_task(call.message.chat.id, data))
 
 async def run_broadcast_task(admin_chat_id: int, data: dict):
-    """
-    Background worker for broadcasting messages.
-    Includes rate limiting and error tracking.
-    """
     users = DatabaseManager.get_all_user_ids()
     total = len(users)
     sent = 0
@@ -840,7 +738,6 @@ async def run_broadcast_task(admin_chat_id: int, data: dict):
     text = data.get("text")
     kb = parse_buttons_text(data.get("buttons"))
     
-    # Progress update interval (every 100 users)
     update_interval = 100
     
     for index, uid in enumerate(users):
@@ -853,11 +750,10 @@ async def run_broadcast_task(admin_chat_id: int, data: dict):
                 await bot.send_video(uid, m_id, caption=text, reply_markup=kb, parse_mode="HTML")
             
             sent += 1
-            await asyncio.sleep(0.04) # 25 msg/sec limit (Safe side)
+            await asyncio.sleep(0.04) 
             
         except TelegramForbiddenError:
             blocked += 1
-            # Mark user as blocked in DB to skip next time? Optional.
         except TelegramRetryAfter as e:
             logger.warning(f"Rate Limited! Sleeping {e.retry_after}s")
             await asyncio.sleep(e.retry_after)
@@ -866,7 +762,6 @@ async def run_broadcast_task(admin_chat_id: int, data: dict):
             logger.error(f"Broadcast Fail for {uid}: {e}")
             errors += 1
             
-        # Optional: Send progress report to admin periodically
         if (index + 1) % update_interval == 0:
             logger.info(f"Broadcast Progress: {index + 1}/{total}")
 
@@ -893,24 +788,15 @@ async def run_broadcast_task(admin_chat_id: int, data: dict):
 
 @router.pre_checkout_query()
 async def on_pre_checkout(checkout_query: PreCheckoutQuery):
-    """
-    Validates the transaction before payment.
-    Always returns True for digital goods in this context.
-    """
     await bot.answer_pre_checkout_query(checkout_query.id, ok=True)
 
 @router.message(F.successful_payment)
 async def on_successful_payment(message: types.Message):
-    """
-    Handles successful payment payload.
-    Updates the user's balance or applies boosters.
-    """
     user_id = message.from_user.id
     payment_info = message.successful_payment
-    payload = payment_info.invoice_payload # Format: "user_id_item_id"
+    payload = payment_info.invoice_payload 
     
     try:
-        # Parse payload
         _, item_id = payload.split("_", 1)
         item = GameConfig.get_item(item_id)
         
@@ -925,7 +811,6 @@ async def on_successful_payment(message: types.Message):
             user_data = db[str_uid]
             item_type = item.get('type')
             amount = item.get('amount')
-            
             success_msg = ""
             
             if item_type == 'coin':
@@ -933,7 +818,6 @@ async def on_successful_payment(message: types.Message):
                 success_msg = f"✅ Added <b>{amount:,} Coins</b> to your balance!"
                 
             elif item_type == 'booster':
-                # Store end timestamp
                 current_end = user_data.get('booster_end', time.time())
                 if current_end < time.time(): current_end = time.time()
                 user_data['booster_end'] = current_end + amount
@@ -958,7 +842,6 @@ async def on_successful_payment(message: types.Message):
 #  SECTION 9: API BACKEND (AIOHTTP ROUTES)
 # ==============================================================================
 
-# 9.1 CORS & Response Helpers
 def cors_response(data: Dict, status: int = 200) -> web.Response:
     return web.json_response(
         data,
@@ -972,7 +855,6 @@ def cors_response(data: Dict, status: int = 200) -> web.Response:
     )
 
 async def options_handler(request):
-    """Handles CORS preflight requests."""
     return web.Response(
         status=200,
         headers={
@@ -982,13 +864,7 @@ async def options_handler(request):
         }
     )
 
-# 9.2 API: User Data Synchronization
 async def api_sync_user_data(request):
-    """
-    Endpoint: /sync-user-data
-    Method: POST
-    Description: Receives game progress from frontend and saves to DB.
-    """
     try:
         data = await request.json()
         user_id = data.get('user_id')
@@ -996,7 +872,6 @@ async def api_sync_user_data(request):
         if not user_id:
             return cors_response({"success": False, "error": "Missing User ID"}, 400)
         
-        # Validating numeric types to prevent injection
         clean_data = {}
         if 'balance' in data: 
             clean_data['balance'] = float(data['balance'])
@@ -1020,13 +895,7 @@ async def api_sync_user_data(request):
         logger.error(f"Sync API Error: {e}")
         return cors_response({"success": False, "error": str(e)}, 500)
 
-# 9.3 API: Verify Membership
 async def api_verify_join(request):
-    """
-    Endpoint: /verify_join
-    Method: POST
-    Description: Checks if user joined required channels.
-    """
     try:
         data = await request.json()
         user_id = data.get('user_id')
@@ -1034,23 +903,21 @@ async def api_verify_join(request):
         if not user_id:
             return cors_response({"joined": False, "error": "No ID"}, 400)
 
-        # Helper to check membership
         async def is_member(chat_id):
             try:
                 member = await bot.get_chat_member(chat_id=chat_id, user_id=user_id)
                 return member.status in ['member', 'administrator', 'creator', 'restricted']
             except Exception as e:
                 logger.warning(f"Bot cannot check member in {chat_id}: {e}")
-                return False # Fail safe
+                return False 
 
         in_channel = await is_member(CHANNEL_USERNAME)
         in_group = await is_member(GROUP_USERNAME)
         
         is_joined = in_channel and in_group
         
-        # Log activity if verified
         if is_joined:
-            DatabaseManager.update_user_progress(user_id, {}) # Just updates last_active
+            DatabaseManager.update_user_progress(user_id, {})
             
         return cors_response({"joined": is_joined})
 
@@ -1058,13 +925,7 @@ async def api_verify_join(request):
         logger.error(f"Verify API Error: {e}")
         return cors_response({"error": str(e)}, 500)
 
-# 9.4 API: Create Invoice
 async def api_create_invoice(request):
-    """
-    Endpoint: /create_invoice
-    Method: POST
-    Description: Generates Telegram Star invoice link.
-    """
     try:
         data = await request.json()
         item_id = data.get('item_id')
@@ -1081,7 +942,7 @@ async def api_create_invoice(request):
             title=item['title'],
             description=item['desc'],
             payload=f"{user_id}_{item_id}",
-            provider_token="", # Empty for Stars
+            provider_token="", 
             currency="XTR",
             prices=[LabeledPrice(label=item['title'], amount=item['price'])]
         )
@@ -1092,50 +953,25 @@ async def api_create_invoice(request):
         logger.error(f"Invoice API Error: {e}")
         return cors_response({"error": str(e)}, 500)
 
-# 9.5 API: Verify Ad Watch
 async def api_verify_ad(request):
-    """
-    Endpoint: /verify-ad
-    Method: POST
-    Description: Logs ad watch and could implement reward logic server-side.
-    """
     try:
         data = await request.json()
         user_id = data.get('user_id')
-        
-        if not user_id:
-            return cors_response({"success": False}, 400)
-            
-        # In a real app, verify server-side signatures here.
+        if not user_id: return cors_response({"success": False}, 400)
         logger.info(f"📺 Ad Watched by {user_id}")
-        
-        # Optionally update "dailyAdCount" in DB here if we trusted the client 100%
-        # For now, we trust the sync endpoint to handle the incremented value.
-        
         return cors_response({"success": True})
     except Exception as e:
         return cors_response({"success": False, "error": str(e)}, 500)
 
-# 9.6 API: Play Spin (Server-Side Logic)
 async def api_play_spin(request):
-    """
-    Endpoint: /play-spin
-    Method: POST
-    Description: Calculates spin result on server to prevent cheating.
-    """
     try:
         data = await request.json()
         user_id = data.get('user_id')
+        if not user_id: return cors_response({"success": False}, 400)
         
-        if not user_id:
-            return cors_response({"success": False}, 400)
-            
-        # Determine prize securely
         prizes = GameConfig.SPIN_PRIZES
         index = random.randint(0, len(prizes) - 1)
         amount = prizes[index]
-        
-        # Log result
         logger.info(f"🎰 Spin: User {user_id} won {amount} TON")
         
         return cors_response({
@@ -1147,31 +983,17 @@ async def api_play_spin(request):
         logger.error(f"Spin API Error: {e}")
         return cors_response({"success": False}, 500)
 
-# 9.7 API: Complete Task
 async def api_complete_task(request):
-    """
-    Endpoint: /complete-task
-    Method: POST
-    Description: Logs task completion.
-    """
     try:
         data = await request.json()
         user_id = data.get('user_id')
         task_id = data.get('task_id')
-        
         logger.info(f"✅ Task Completed: {task_id} by {user_id}")
-        # Logic to save specific task state to DB could go here
-        
         return cors_response({"success": True})
     except Exception as e:
         return cors_response({"success": False}, 500)
 
-# 9.8 API: Get Referrals (Optional - if frontend needs to fetch dynamically)
 async def api_get_referrals(request):
-    """
-    Endpoint: /get-referrals?user_id=123
-    Method: GET
-    """
     try:
         user_id = request.query.get('user_id')
         if not user_id: return cors_response({"error": "No ID"}, 400)
@@ -1180,7 +1002,6 @@ async def api_get_referrals(request):
         if not user or 'referrals' not in user:
             return cors_response({"referrals": []})
             
-        # Resolve referral IDs to Names/Balances
         ref_list = []
         db = DatabaseManager.load_db()
         for ref_id in user['referrals']:
@@ -1189,14 +1010,13 @@ async def api_get_referrals(request):
                 ref_list.append({
                     "username": ref_data.get('username', 'Unknown'),
                     "balance": ref_data.get('balance', 0),
-                    "avatar": "https://alamin12071985-a11y.github.io/Snowman-Adventure/snowman.webp" # Placeholder
+                    "avatar": "https://alamin12071985-a11y.github.io/Snowman-Adventure/snowman.webp"
                 })
         
         return cors_response({"referrals": ref_list})
     except Exception as e:
         return cors_response({"error": str(e)}, 500)
 
-# 9.9 Root Health Check
 async def home_handler(request):
     return web.Response(text=f"☃️ Snowman Backend Online v2.0 | {datetime.now()}")
 
@@ -1205,17 +1025,12 @@ async def home_handler(request):
 # ==============================================================================
 
 async def on_startup(bot: Bot):
-    """Triggered when the server starts."""
     logger.info("🚀 Server Initiation Sequence Started...")
-    
     if WEBHOOK_URL.startswith("https://"):
         logger.info(f"🔗 Setting Webhook to: {WEBHOOK_URL}")
         try:
-            # Drop pending updates to prevent command flood on restart
             await bot.delete_webhook(drop_pending_updates=True)
             await bot.set_webhook(WEBHOOK_URL)
-            
-            # Set Bot Commands Menu
             await bot.set_my_commands([
                 BotCommand(command="start", description="☃️ Start Adventure"),
                 BotCommand(command="help", description="❓ Get Help"),
@@ -1228,27 +1043,16 @@ async def on_startup(bot: Bot):
         logger.warning("⚠️ Webhook not set: URL must be HTTPS (SSL).")
 
 async def on_shutdown(bot: Bot):
-    """Triggered when the server stops."""
     logger.info("🔌 Server Shutdown Sequence Initiated...")
-    
-    # Perform a final backup before dying
     DatabaseManager.create_backup()
-    
     await bot.delete_webhook()
     await bot.session.close()
     logger.info("👋 Goodbye!")
 
 def main():
-    """Main Entry Point."""
-    
-    # 1. Initialize Web App
     app = web.Application()
     
-    # 2. Register Routes
-    # Root
     app.router.add_get('/', home_handler)
-    
-    # API Routes
     app.router.add_post('/sync-user-data', api_sync_user_data)
     app.router.add_post('/verify_join', api_verify_join)
     app.router.add_post('/create_invoice', api_create_invoice)
@@ -1257,26 +1061,20 @@ def main():
     app.router.add_post('/complete-task', api_complete_task)
     app.router.add_get('/get-referrals', api_get_referrals)
     
-    # CORS Preflight for all API routes
     for route in list(app.router.routes()):
         if route.method == "POST":
             app.router.add_options(route.resource.canonical, options_handler)
 
-    # 3. Setup Aiogram Webhook Handler
-    webhook_handler = SimpleRequestHandler(
-        dispatcher=dp,
-        bot=bot
-    )
+    webhook_handler = SimpleRequestHandler(dispatcher=dp, bot=bot)
     webhook_handler.register(app, path=WEBHOOK_PATH)
 
-    # 4. Attach Hooks - THIS WAS THE MISSING PART CAUSING THE ISSUES
+    # VITAL FIX: Registering startup/shutdown hooks
     dp.startup.register(on_startup)
     dp.shutdown.register(on_shutdown)
+
     setup_application(app, dp, bot=bot)
     
-    # 5. Launch
     logger.info(f"🌍 Starting Web Server on 0.0.0.0:{PORT}")
-    
     try:
         web.run_app(app, host="0.0.0.0", port=PORT)
     except Exception as e:
